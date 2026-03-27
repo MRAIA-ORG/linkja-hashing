@@ -12,14 +12,14 @@
         <main.runnable.class>org.linkja.hashing.Runner</main.runnable.class>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>${maven.compiler.source}</maven.compiler.target>
 
-        <junit.jupiter.version>5.3.2</junit.jupiter.version>
-        <mockito.version>2.21.0</mockito.version>
-        <maven.surefire.version>2.22.1</maven.surefire.version>
-        <commons.csv.version>1.6</commons.csv.version>
-        <json.version>20180813</json.version>
+        <junit.jupiter.version>5.11.4</junit.jupiter.version>
+        <mockito.version>5.22.0</mockito.version>
+        <maven.surefire.version>3.5.5</maven.surefire.version>
+        <commons.csv.version>1.14.1</commons.csv.version>
+        <json.version>20251224</json.version>
     </properties>
 
 
@@ -65,19 +65,19 @@
         <dependency>
             <groupId>commons-cli</groupId>
             <artifactId>commons-cli</artifactId>
-            <version>1.4</version>
+            <version>1.11.0</version>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-csv</artifactId>
             <version>${commons.csv.version}</version>
         </dependency>
-        <dependency>
-            <groupId>commons-lang</groupId>
-            <artifactId>commons-lang</artifactId>
-            <version>2.5</version>
-        </dependency>
-
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<version>3.20.0</version>
+			<scope>compile</scope>
+		</dependency>
         <dependency>
             <groupId>org.linkja</groupId>
             <artifactId>linkja-core</artifactId>
@@ -92,13 +92,19 @@
 
     <build>
         <plugins>
+		
             <!-- JUnit 5 requires Surefire version 2.22.1 or higher -->
             <plugin>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${maven.surefire.version}</version>
                 <configuration>
                     <!-- Specify the library path to include the liblinkjacrypto library -->
-                    <argLine>-Djava.library.path=./lib</argLine>
+                    <argLine>
+					    -Djava.library.path=./lib
+					    -Xshare:off 
+						-javaagent:"${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar"
+						--enable-native-access=ALL-UNNAMED
+					</argLine>
                 </configuration>
             </plugin>
             <plugin>
@@ -109,6 +115,7 @@
                         <id>copy-dependencies</id>
                         <phase>prepare-package</phase>
                         <goals>
+							<goal>properties</goal>
                             <goal>copy-dependencies</goal>
                         </goals>
                         <configuration>
@@ -148,7 +155,7 @@
                 <!-- Build an executable JAR -->
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.1.1</version>
+                <version>3.5.0</version>
                 <configuration>
                     <archive>
                         <manifest>
@@ -161,6 +168,16 @@
                     </archive>
                 </configuration>
             </plugin>
+			<plugin>
+			  <groupId>org.apache.maven.plugins</groupId>
+			  <artifactId>maven-compiler-plugin</artifactId>
+			  <version>3.15.0</version>
+			  <configuration>
+				<compilerArgs>
+				  <arg>-Xlint:deprecation</arg>
+				</compilerArgs>
+			  </configuration>
+			</plugin>
         </plugins>
     </build>
 </project>
