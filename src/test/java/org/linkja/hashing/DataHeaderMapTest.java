@@ -2,14 +2,15 @@ package org.linkja.hashing;
 
 import org.linkja.core.*;
 import org.junit.jupiter.api.Test;
-import org.mockito.internal.util.reflection.FieldSetter;
 
 import java.util.HashMap;
+import java.lang.reflect.Field;
+import org.apache.commons.lang3.reflect.FieldUtils;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class DataHeaderMapTest {
-
+  
   @Test
   void createFromCSVHeader_Null() {
     DataHeaderMap map = new DataHeaderMap();
@@ -105,79 +106,79 @@ class DataHeaderMapTest {
   }
 
   @Test
-  void findIndexOfCanonicalName_Null() throws NoSuchFieldException {
+  void findIndexOfCanonicalName_Null() throws NoSuchFieldException, IllegalAccessException {
     HashMap<Integer, DataHeaderMapEntry> data = new HashMap<Integer, DataHeaderMapEntry>() {{
       put(1, new DataHeaderMapEntry(1, "test", "test_id"));
       put(2, new DataHeaderMapEntry(2, "other", "other_id"));
     }};
     DataHeaderMap map = new DataHeaderMap();
-    FieldSetter.setField(map, map.getClass().getDeclaredField("entries"), data);
+	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assertEquals(-1, map.findIndexOfCanonicalName(null));
   }
 
   @Test
-  void findIndexOfCanonicalName_NotFound() throws NoSuchFieldException {
+  void findIndexOfCanonicalName_NotFound() throws NoSuchFieldException, IllegalAccessException {
     HashMap<Integer, DataHeaderMapEntry> data = new HashMap<Integer, DataHeaderMapEntry>() {{
       put(1, new DataHeaderMapEntry(1, "test", "test_id"));
       put(2, new DataHeaderMapEntry(2, "other", "other_id"));
     }};
     DataHeaderMap map = new DataHeaderMap();
-    FieldSetter.setField(map, map.getClass().getDeclaredField("entries"), data);
+	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assertEquals(-1, map.findIndexOfCanonicalName("test_ids"));
   }
 
   @Test
-  void findIndexOfCanonicalName_NotFoundNullEntries() throws NoSuchFieldException {
+  void findIndexOfCanonicalName_NotFoundNullEntries() throws NoSuchFieldException, IllegalAccessException {
     HashMap<Integer, DataHeaderMapEntry> data = new HashMap<Integer, DataHeaderMapEntry>() {{
       put(1, new DataHeaderMapEntry(1, "test"));
       put(2, new DataHeaderMapEntry(2, "other"));
     }};
     DataHeaderMap map = new DataHeaderMap();
-    FieldSetter.setField(map, map.getClass().getDeclaredField("entries"), data);
+	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assertEquals(-1, map.findIndexOfCanonicalName("test_ids"));
   }
 
   @Test
-  void findIndexOfCanonicalName_Found() throws NoSuchFieldException {
+  void findIndexOfCanonicalName_Found() throws NoSuchFieldException, IllegalAccessException {
     HashMap<Integer, DataHeaderMapEntry> data = new HashMap<Integer, DataHeaderMapEntry>() {{
       put(1, new DataHeaderMapEntry(1, "test", "test_id"));
       put(2, new DataHeaderMapEntry(2, "other", "other_id"));
     }};
     DataHeaderMap map = new DataHeaderMap();
-    FieldSetter.setField(map, map.getClass().getDeclaredField("entries"), data);
+	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assertEquals(2, map.findIndexOfCanonicalName("other_id"));
   }
 
   @Test
-  void containsCanonicalColumn_Null() throws NoSuchFieldException {
+  void containsCanonicalColumn_Null() throws NoSuchFieldException, IllegalAccessException {
     HashMap<Integer, DataHeaderMapEntry> data = new HashMap<Integer, DataHeaderMapEntry>() {{
       put(1, new DataHeaderMapEntry(1, "test", "test_id"));
       put(2, new DataHeaderMapEntry(2, "other", "other_id"));
     }};
     DataHeaderMap map = new DataHeaderMap();
-    FieldSetter.setField(map, map.getClass().getDeclaredField("entries"), data);
+	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assertFalse(map.containsCanonicalColumn(null));
   }
 
   @Test
-  void containsCanonicalColumn_NotFound() throws NoSuchFieldException {
+  void containsCanonicalColumn_NotFound() throws NoSuchFieldException, IllegalAccessException {
     HashMap<Integer, DataHeaderMapEntry> data = new HashMap<Integer, DataHeaderMapEntry>() {{
       put(1, new DataHeaderMapEntry(1, "test", "test_id"));
       put(2, new DataHeaderMapEntry(2, "other", "other_id"));
     }};
     DataHeaderMap map = new DataHeaderMap();
-    FieldSetter.setField(map, map.getClass().getDeclaredField("entries"), data);
+	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assertFalse(map.containsCanonicalColumn("test_ids"));
   }
 
   @Test
-  void containsCanonicalColumn_Found() throws NoSuchFieldException {
+  void containsCanonicalColumn_Found() throws NoSuchFieldException, IllegalAccessException {
     HashMap<Integer, DataHeaderMapEntry> data = new HashMap<Integer, DataHeaderMapEntry>() {{
       put(1, new DataHeaderMapEntry(1, "test", "test_id"));
       put(2, new DataHeaderMapEntry(2, "other", "other_id"));
     }};
     DataHeaderMap map = new DataHeaderMap();
-    FieldSetter.setField(map, map.getClass().getDeclaredField("entries"), data);
+	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assert(map.containsCanonicalColumn("other_id"));
   }
 }

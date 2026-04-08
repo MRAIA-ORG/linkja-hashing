@@ -1,11 +1,12 @@
 package org.linkja.hashing;
 
 import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
-import org.apache.commons.lang.ArrayUtils;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.linkja.core.crypto.AesEncryptParameters;
 import org.linkja.crypto.AesResult;
 import org.linkja.crypto.Library;
@@ -94,7 +95,8 @@ public class Engine {
     if (this.canonicalHeaderNames == null) {
       this.canonicalHeaderNames = new HashMap<String, String>();
       try (InputStream csvStream = getClass().getResourceAsStream("/configuration/canonical-header-names.csv")) {
-        CSVParser parser = CSVParser.parse(csvStream, Charset.defaultCharset(), CSVFormat.DEFAULT.withHeader());
+		CSVFormat format = CSVFormat.DEFAULT.builder().setHeader().get();
+        CSVParser parser = CSVParser.parse(csvStream, Charset.defaultCharset(), format);
         for (CSVRecord csvRecord : parser) {
           this.canonicalHeaderNames.put(csvRecord.get(0).trim().toLowerCase(), csvRecord.get(1).trim().toLowerCase());
         }
@@ -118,7 +120,8 @@ public class Engine {
     if (this.genericNames == null) {
       this.genericNames = new HashMap<String, String>();
       try (InputStream csvStream = getClass().getResourceAsStream("/configuration/generic-names.csv")) {
-        CSVParser parser = CSVParser.parse(csvStream, Charset.defaultCharset(), CSVFormat.DEFAULT.withHeader());
+		CSVFormat format = CSVFormat.DEFAULT.builder().setHeader().get();
+        CSVParser parser = CSVParser.parse(csvStream, Charset.defaultCharset(), format);
         for (CSVRecord csvRecord : parser) {
           String name = csvRecord.get(0);
           String match = csvRecord.get(1);
@@ -130,7 +133,8 @@ public class Engine {
     if (this.fieldIds == null) {
       this.fieldIds = new HashMap<String, String>();
       try (InputStream csvStream = getClass().getResourceAsStream("/configuration/field-ids.csv")) {
-        CSVParser parser = CSVParser.parse(csvStream, Charset.defaultCharset(), CSVFormat.DEFAULT.withHeader());
+		CSVFormat format = CSVFormat.DEFAULT.builder().setHeader().get();
+        CSVParser parser = CSVParser.parse(csvStream, Charset.defaultCharset(), format);
         for (CSVRecord csvRecord : parser) {
           // We match our canonical field names as case-insensitive, but note that we want to take the mapped field ID
           // exactly as it is entered (with the exception of leading/trailing whitespace).
@@ -191,7 +195,11 @@ public class Engine {
     initialize();
 
     try (BufferedReader csvReader = new BufferedReader(new FileReader(parameters.getPatientFile()))) {
-      CSVParser parser = CSVParser.parse(csvReader, CSVFormat.DEFAULT.withHeader().withDelimiter(this.parameters.getDelimiter()));
+      CSVFormat format = CSVFormat.DEFAULT.builder()
+							.setHeader()
+							.setDelimiter(this.parameters.getDelimiter())
+							.get();
+	  CSVParser parser = CSVParser.parse(csvReader, format);
       Map<String, Integer> csvHeaderMap = parser.getHeaderMap();
       this.patientDataHeaderMap.createFromCSVHeader(csvHeaderMap).mergeCanonicalHeaders(this.canonicalHeaderNames);
       verifyFields();
@@ -433,9 +441,10 @@ public class Engine {
    * @throws IOException
    */
   private CSVPrinter createCrosswalkPrinter(BufferedWriter writer) throws IOException {
-    return new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader(
-            Engine.PATIENT_ID_FIELD,
-            HashingStep.PIDHASH_FIELD));
+	CSVFormat format = CSVFormat.DEFAULT.builder()
+						.setHeader(Engine.PATIENT_ID_FIELD, HashingStep.PIDHASH_FIELD)
+						.get();  
+    return new CSVPrinter(writer, format);
   }
 
   /**
@@ -445,14 +454,18 @@ public class Engine {
    * @throws IOException
    */
   private CSVPrinter createInvalidDataPrinter(BufferedWriter writer) throws IOException {
-      return new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader(
-              Engine.INVALID_DATA_ROW_NUMBER_FIELD,
-              Engine.PATIENT_ID_FIELD,
-              Engine.FIRST_NAME_FIELD,
-              Engine.LAST_NAME_FIELD,
-              Engine.DATE_OF_BIRTH_FIELD,
-              Engine.SOCIAL_SECURITY_NUMBER,
-              Engine.INVALID_DATA_ERROR_DESCRIPTION_FIELD));
+	  CSVFormat format = CSVFormat.DEFAULT.builder()
+						  .setHeader(
+						    Engine.INVALID_DATA_ROW_NUMBER_FIELD,
+							Engine.PATIENT_ID_FIELD,
+							Engine.FIRST_NAME_FIELD,
+							Engine.LAST_NAME_FIELD,
+							Engine.DATE_OF_BIRTH_FIELD,
+							Engine.SOCIAL_SECURITY_NUMBER,
+							Engine.INVALID_DATA_ERROR_DESCRIPTION_FIELD
+							)
+						  .get();  
+      return new CSVPrinter(writer, format);
   }
 
   /**

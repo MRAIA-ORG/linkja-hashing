@@ -1,6 +1,6 @@
 package org.linkja.hashing.steps;
 
-import org.apache.commons.lang.ArrayUtils;
+import org.apache.commons.lang3.ArrayUtils;
 import org.linkja.core.crypto.AesEncryptParameters;
 import org.linkja.crypto.AesResult;
 import org.linkja.crypto.Library;

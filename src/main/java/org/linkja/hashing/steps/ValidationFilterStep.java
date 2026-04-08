@@ -1,6 +1,6 @@
 package org.linkja.hashing.steps;
 
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.linkja.hashing.DataRow;
 import org.linkja.hashing.Engine;
 
