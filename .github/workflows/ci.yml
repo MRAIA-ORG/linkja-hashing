@@ -31,12 +31,11 @@ jobs:
       - name: Install OpenSSL 3, CMake and cmocka
         run: sudo apt-get update && sudo apt-get install -y libssl-dev cmake libcmocka-dev
 
-      # Hashing calls createSecureHash, which only the secret build holds.
-      # Configure generates a new random secret on every run. It is never stored.
-      - name: Compile the secret build of the C library with a throwaway secret
+      # The tests call only Library.hash, so the public build is enough.
+      - name: Compile the public build of the C library
         working-directory: linkja-crypto
         run: |
-          cmake . -DCMAKE_BUILD_TYPE=Release
+          cmake . -DINCLUDE_SECRETS=OFF -DCMAKE_BUILD_TYPE=Release
           make linkjacrypto
 
       - name: Test and package linkja-hashing
