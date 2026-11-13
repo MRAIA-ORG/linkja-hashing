@@ -17,13 +17,24 @@ This component allows the aggregator to merge files, disambiguate the hashes and
 
 
 ## Building
-linkja-hashing has been tested under Java JDK 25 (specifically [Adoptium Temurin JDK](https://adoptium.net/temurin/releases)).  It can be opened from within an IDE like Eclipse or IntelliJ IDEA and compiled, or compiled from the command line using [Maven](https://maven.apache.org/).
+linkja-hashing has been tested under Java JDK 25 (specifically [Adoptium Temurin JDK](https://adoptium.net/temurin/releases)).  It can be opened from within an IDE like Eclipse or IntelliJ IDEA and compiled, or compiled from the command line using [Maven](https://maven.apache.org/). Maven downloads the linkja-core and linkja-crypto JARs from [linkja-mvn-repo](https://github.com/MRAIA-ORG/linkja-mvn-repo).
 
-You can build linkja-hashing via Maven:
+The tests call the linkja C library, so compile it first from the `develop` branch of [linkja-crypto](https://github.com/MRAIA-ORG/linkja-crypto). The tests need only the public build. Running the program at a site needs the secret build of the project. The C library needs OpenSSL 3, CMake and cmocka (e.g. `brew install openssl@3 cmake cmocka`), and CMake needs `JAVA_HOME` set to Java 25. From a linkja-crypto clone beside this one:
 
-`mvn clean package`
+```
+cmake . -DINCLUDE_SECRETS=OFF -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+make linkjacrypto
+```
 
-This will compile the code, run all unit tests, and create an executable JAR file under the .\target folder with all dependency JARs included.  The JAR will be named something like `Hashing-1.0-jar-with-dependencies.jar`.
+On Linux, install `libssl-dev cmake libcmocka-dev` and leave out `-DOPENSSL_ROOT_DIR`.
+
+Then, from this folder:
+
+`mvn clean package -Dnative.lib.dir=../linkja-crypto/target`
+
+This compiles the code, runs all unit tests, and creates an executable JAR file in the `target` folder with all dependency JARs included, e.g. `target/Hashing-1.1.1-jar-with-dependencies.jar`. If you do not give `native.lib.dir`, the tests look for the library in the `lib` folder.
+
+CI runs the same steps on each pull request. See `.github/workflows/ci.yml`.
 
 ## Program Use
 You can run the executable JAR file (the one including `with-dependencies` in the file name) using the standard Java command:
