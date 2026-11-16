@@ -140,12 +140,12 @@ output.directory=out/
 Rules:
 
 * The required keys are `site.salt_file`, `aggregator.public_key`, `site.private_date` and `input.file`. Each one can come from the file or from its command-line flag (`--saltFile`, `--encryptionKey`, `--privateDate`, `--patientFile`). If one is missing, the run stops before it makes an output file, and the message names the key.
-* A key that is not one of the keys above, e.g. the typo `input.date_fromat`, stops the run, and the message gives its line number. It names the key only when the line has a value after it, so a line with no `=`, e.g. `site.private_date01/01/2018`, is never printed.
-* A run config file that is not found or is not UTF-8 stops the run, and the message says which.
+* A key that is not one of the keys above, e.g. the typo `input.date_fromat`, stops the run, and the message gives the line the key starts on. It names the key only when `=` or `:` follows the key on its line. It never prints the text after the key. So a line with no `=` or `:`, e.g. `site.private_date01/01/2018` or `site.private_date2018 01 01`, is never printed.
+* A run config file that is not found or is not UTF-8 stops the run, and the message says which. A folder given as `--config` stops the run, and the message says it must be a file.
 * A flag on the command line wins over the same key in the file, e.g. `--delimiter "|"` wins over `input.delimiter=,`.
 * `output.directory` and `--outDirectory` are the same setting. Without either, the output goes to the current directory.
 * A relative path is read from the folder where you run `java`. Write paths with `/`. In a Properties file, `\` starts an escape, so `C:\keys\salt.txt` does not read as you expect. `C:/keys/salt.txt` works.
-* `input.date_format` is the format of the birth date, as a Java date pattern. Use `uuuu` for the year (e.g. `uuuu/MM/dd`), because the date parser is strict. A time of day after the date is allowed, e.g. `dd/MM/uuuu HH:mm`. When it is set, only that format is accepted. Without it, the default birth date formats apply. A pattern that cannot read a full date back unchanged stops the run, e.g. `yyyy/MM/dd` or the two-digit year `dd/MM/uu`.
+* `input.date_format` is the format of the birth date, as a Java date pattern. Use `uuuu` for the year (e.g. `uuuu/MM/dd`), because the date parser is strict. A time of day after the date is allowed, e.g. `dd/MM/uuuu HH:mm`, and so is a zone offset or zone name, e.g. `uuuu-MM-dd HH:mm XXX`, `uuuu-MM-dd VV` or `uuuu-MM-dd z`. The birth date is the date as written, and the zone is not applied to it. When it is set, only that format is accepted. Without it, the default birth date formats apply. A pattern that cannot read a full date back unchanged stops the run, e.g. `yyyy/MM/dd` or the two-digit year `dd/MM/uu`.
 * Without `input.date_format`, a birth date reads in any of these formats. Each one can have a time after it, e.g. `2001/2/3 13:02` or `2001/2/3 13:02:03`.
   * `uuuu/M/d`, e.g. `2001/2/3`
   * `uuuu-M-d`, e.g. `2001-2-3`

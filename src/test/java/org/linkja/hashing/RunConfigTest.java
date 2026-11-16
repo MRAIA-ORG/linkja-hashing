@@ -412,7 +412,113 @@ class RunConfigTest {
     assertEquals(saltFile.toFile(), parameters("--config", config.toString()).getSaltFile());
   }
 
+  // ---- Ticket #98: run config messages ----
+
+  @Test
+  void lineWithNoSeparator_LettersOnly_NotPrinted() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("site.salt_filesalt\n"));
+    assertFalse(exc.getMessage().contains("salt_filesalt"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("line 1"), exc.getMessage());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = { "site.private_dat=01/01/2018", "site.private_dat:01/01/2018",
+    "site.private_dat = 01/01/2018", "site.private_date2018 01 01", "site.private_date2018\t01 01" })
+  void unknownKey_NoTextAfterKeyPrinted(String line) throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig(line + "\n"));
+    assertFalse(exc.getMessage().contains("2018"), exc.getMessage());
+    assertFalse(exc.getMessage().contains("01 01"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("line 1"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_NamedWithEqualsOrColon() throws Exception {
+    assertEquals("The run config key input.date_fromat on line 1 is not a known key. Check its spelling in the README.",
+      assertThrows(LinkjaException.class, () -> loadConfig("input.date_fromat=dd/MM/uuuu\n")).getMessage());
+    assertTrue(assertThrows(LinkjaException.class, () -> loadConfig("input.date_fromat : dd/MM/uuuu\n"))
+      .getMessage().contains("input.date_fromat on line 1"));
+  }
+
+  @Test
+  void unknownKey_LineNumberIsLineOfThatKey() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("site.salt_file=s.txt\nsite=1\n"));
+    assertTrue(exc.getMessage().contains("line 2"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_AfterByteOrderMark_GivesLineNumber() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("\uFEFFinput.date_fromat=dd/MM/uuuu\n"));
+    assertTrue(exc.getMessage().contains("input.date_fromat on line 1"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_ContinuedOverTwoLines_GivesFirstLine() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class,
+      () -> loadConfig("site.salt_file=a\\\n  b\n# note\\\ninput.date_\\\n  fromat=x\n"));
+    assertTrue(exc.getMessage().contains("line 4"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_AfterEscapedBackslash_NextLineIsNewEntry() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class,
+      () -> loadConfig("site.salt_file=C:\\\\\ninput.date_fromat=x\n"));
+    assertTrue(exc.getMessage().contains("input.date_fromat on line 2"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_LineAfterContinuedValue_IsNotSearchedAgain() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("site.salt_file=\\\nfoo=1\nfoo=2\n"));
+    assertTrue(exc.getMessage().contains("foo on line 3"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_WithLeadingSpaces_IsNamed() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("  input.date_fromat=x\n"));
+    assertTrue(exc.getMessage().contains("input.date_fromat on line 1"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_AfterNextLineCharInValue_CountsLinesLikeProperties() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class,
+      () -> loadConfig("site.salt_file=a\u0085b\ninput.date_fromat=x\n"));
+    assertTrue(exc.getMessage().contains("input.date_fromat on line 2"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_NotNamed_MessageReadsCorrectly() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("# a comment\nsite.salt_filesalt\n"));
+    assertEquals("The run config has a key on line 2 that is not a known key. Check the spelling of each key in the README.",
+      exc.getMessage());
+  }
+
+  @Test
+  void runConfigIsDirectory_NamesPathAndSaysFile() throws Exception {
+    String folder = newDir().toString();
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters("--config", folder));
+    assertTrue(exc.getMessage().contains(folder), exc.getMessage());
+    assertTrue(exc.getMessage().contains("must be a file"), exc.getMessage());
+  }
+
+  @Test
+  void dateFormat_WithZoneOffset_HashesAsIsoDateByFlags() throws Exception {
+    Path extract = write("with-offset.csv", String.join("\n",
+      "patient_id,first_name,last_name,dob,ssn",
+      "P1,Alice,Smith,2001-02-03 23:30 -05:00,123-45-6780") + "\n");
+    Path iso = write("iso.csv", String.join("\n",
+      "patient_id,first_name,last_name,dob,ssn",
+      "P1,Alice,Smith,2001-02-03,123-45-6780") + "\n");
+    List<String> lines = requiredKeys(extract, newDir());
+    lines.add("input.date_format=uuuu-MM-dd HH:mm XXX");
+    List<String> byConfig = hash("--config", writeConfig(lines).toString());
+    assertEquals(1, byConfig.size());
+    assertEquals(hash(flagArgs(iso, newDir())), byConfig);
+  }
+
   // ---- Helpers ----
+
+  private static java.util.Properties loadConfig(String text) throws Exception {
+    return Runner.loadRunConfig(Files.writeString(Files.createTempFile(dir, "run", ".properties"), text).toString());
+  }
 
   private static EngineParameters parameters(String... args) throws Exception {
     return Runner.buildParameters(Runner.parseCommandLine(Runner.setUpCommandLine(), args));

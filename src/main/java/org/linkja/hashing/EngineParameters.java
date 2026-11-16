@@ -9,7 +9,8 @@ import java.security.InvalidParameterException;
 import java.text.ParseException;
 import java.time.DateTimeException;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.ResolverStyle;
 import java.util.Map;
@@ -279,8 +280,9 @@ public class EngineParameters {
       return;
     }
     String trimmed = pattern.trim();
-    // A date before 2000 shows a two-digit year. Midnight lets a pattern with a time of day format the sample.
-    LocalDateTime sample = LocalDateTime.of(1950, 2, 3, 0, 0);
+    // A date before 2000 shows a two-digit year. Midnight in UTC lets a pattern with a time of day or a zone offset
+    // format the sample. The birth date read is the date as written, and the offset is not applied to it.
+    ZonedDateTime sample = ZonedDateTime.of(1950, 2, 3, 0, 0, 0, 0, ZoneOffset.UTC);
     String reason;
     try {
       DateTimeFormatter formatter = dateOfBirthFormatter(trimmed);
