@@ -154,7 +154,7 @@ Rules:
   * `M/d/uuuu`, e.g. `2/3/2001`
   * `M-d-uuuu`, e.g. `2-3-2001`
   * `M d uuuu`, e.g. `2 3 2001`
-* The 8 digits `MMdduuuu` on their own do not read, e.g. `02032001` is read as year 0203, month 20, and is rejected.
+* The 8 digits of a birth date do not read as `MMdduuuu`, e.g. `02032001` is read as year 0203, month 20, and is rejected.
 * A `column.<field>=<header>` key names the column of the input extract that gives the field. The field can be any name in the `alias_name` column of `src/main/resources/configuration/canonical-header-names.csv`, e.g. `column.patient_id`, `column.first_name`, `column.last_name`, `column.birth_date` (or `column.dob`) and `column.ssn`. The field name ignores case, e.g. `column.FIRST_NAME` is the same as `column.first_name`. Header matching ignores case.
 * For each field, the `column.` key wins over the fixed header list (`src/main/resources/configuration/canonical-header-names.csv`), even when that list maps the header to another field. The other columns that the list maps to that field are ignored.
 * The fixed header list is used only for a field with no `column.` key.

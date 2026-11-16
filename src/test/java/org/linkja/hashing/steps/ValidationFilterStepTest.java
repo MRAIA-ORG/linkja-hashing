@@ -316,9 +316,22 @@ class ValidationFilterStepTest {
     assert(step.isValidDateFormat("2-3-2001"));    // M-d-uuuu
     assert(step.isValidDateFormat("2 3 2001"));    // M d uuuu
     // MMdduuuu is in the default pattern, but the uuuuMMdd section reads these 8 digits first, so today it fails.
-    // This test keeps today's behavior. Fixing it changes which rows hash, so it is its own ticket.
+    // This test keeps today's behavior. The owner decided to keep it, so hashing output does not change (#97).
     assertFalse(step.isValidDateFormat("02032001"));
     assertFalse(step.isValidDateFormat("12312001"));
+  }
+
+  @Test
+  void isValidDateFormat_PinsCurrentBehavior_FormsRejectedToday() {
+    // Values that do not read today. Hashing output must not change, so none of them may start to read.
+    ValidationFilterStep step = new ValidationFilterStep(ValidationFilterStep.DATE_OF_BIRTH_FORMATTER);
+    String[] rejected = {"2001.2.3", "3/2/01", "2/3/01", "01/02/03", "010203", "2001-02-03T13:02",
+            "2001/2/3T13:02", "Feb 3 2001", "2001/2/3 13:2", "2001/2/3 13:02:3", "2001/2/3 13:02:03.5",
+            "2001/2/3 24:00", "2001/2/3 13:02 PM", "2001/2/3  13:02", "02032001 13:02",
+            "2/3/2001 13:02 13:02", "2001/2/3 13:02:0302042001"};
+    for (String value : rejected) {
+      assertFalse(step.isValidDateFormat(value), value);
+    }
   }
 
   @Test
