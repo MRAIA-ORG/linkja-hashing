@@ -181,4 +181,23 @@ class DataHeaderMapTest {
 	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assert(map.containsCanonicalColumn("other_id"));
   }
+
+  @Test
+  void mergeCanonicalHeaders_TwoColumnsForOneField() {
+    HashMap<String, Integer> csvHeader = new HashMap<String, Integer>() {{
+      put("ID", 0);
+      put("PATIENT_ID", 1);
+      put("first_name", 2);
+    }};
+    HashMap<String, String> canonicalHeaders = new HashMap<String, String>() {{
+      put("id", "patient_id");
+      put("patient_id", "patient_id");
+      put("first_name", "first_name");
+    }};
+    DataHeaderMap map = new DataHeaderMap().createFromCSVHeader(csvHeader);
+    LinkjaException exc = assertThrows(LinkjaException.class, () -> map.mergeCanonicalHeaders(canonicalHeaders));
+    assertTrue(exc.getMessage().contains("patient_id"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("\"ID\""), exc.getMessage());
+    assertTrue(exc.getMessage().contains("\"PATIENT_ID\""), exc.getMessage());
+  }
 }

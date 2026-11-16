@@ -35,7 +35,7 @@ public class DataHeaderMap {
    * Merge in the canonical header mapping so that all of our entries have a mapped canonical header (if one exists).
    * @param canonicalHeaders
    * @return
-   * @throws LinkjaException
+   * @throws LinkjaException If no headers are loaded, or if two columns map to one canonical field
    */
   public DataHeaderMap mergeCanonicalHeaders(Map<String, String> canonicalHeaders) throws LinkjaException {
     if (canonicalHeaders == null) {
@@ -46,11 +46,19 @@ public class DataHeaderMap {
       throw new LinkjaException("You must load the list of headers before merging in the canonical headers");
     }
 
-    for (Map.Entry<Integer, DataHeaderMapEntry> entry : this.entries.entrySet()) {
-      Integer index = entry.getKey();
-      String originalName = entry.getValue().getOriginalName().trim().toLowerCase();
+    // One column per field. With two, the patient ID check and the hash could read different columns, so we stop.
+    HashMap<String, DataHeaderMapEntry> columnForField = new HashMap<String, DataHeaderMapEntry>();
+    for (DataHeaderMapEntry entry : new TreeMap<Integer, DataHeaderMapEntry>(this.entries).values()) {
+      String originalName = entry.getOriginalName().trim().toLowerCase();
       if (canonicalHeaders.containsKey(originalName)) {
-        this.entries.get(index).setCanonicalName(canonicalHeaders.get(originalName));
+        String canonicalName = canonicalHeaders.get(originalName);
+        DataHeaderMapEntry other = columnForField.putIfAbsent(canonicalName, entry);
+        if (other != null) {
+          throw new LinkjaException(String.format(
+            "The field %s has more than one column: \"%s\" and \"%s\". Keep one column for each field and run again.",
+            canonicalName, other.getOriginalName(), entry.getOriginalName()));
+        }
+        entry.setCanonicalName(canonicalName);
       }
     }
 
