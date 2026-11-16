@@ -127,6 +127,9 @@ public class Runner {
    *                         such as input.date_fromat
    */
   public static Properties loadRunConfig(String path) throws IOException, LinkjaException {
+    if (Files.isDirectory(Paths.get(path))) {
+      throw new LinkjaException(String.format("The run config %s is a folder. It must be a file.", path));
+    }
     String text;
     try {
       text = Files.readString(Paths.get(path));
@@ -137,8 +140,11 @@ public class Runner {
     catch (CharacterCodingException exc) {
       throw new LinkjaException(String.format("The run config file %s is not UTF-8. Save it as UTF-8 and run again.", path));
     }
+    if (text.startsWith("\uFEFF")) {
+      text = text.substring(1);
+    }
     Properties runConfig = new Properties();
-    runConfig.load(new StringReader(text.startsWith("\uFEFF") ? text.substring(1) : text));
+    runConfig.load(new StringReader(text));
     for (String key : runConfig.stringPropertyNames()) {
       if (!key.startsWith(COLUMN_KEY_PREFIX) && !RUN_CONFIG_KEYS.contains(key)) {
         throw new LinkjaException(unknownKeyMessage(text, key));
@@ -148,21 +154,45 @@ public class Runner {
   }
 
   /**
-   * The message for an unknown key. A line with no separator is read as one long key, and that line can hold a
-   * value such as the private date. So the key is named only when its line also has a value after it and the key
-   * looks like a key name, e.g. not the first part of a data row from a wrong file.
+   * The message for an unknown key. Each key/value entry (a line, or lines joined by a final backslash) is read
+   * alone, to find the first line of the entry that holds the key. A line with no "=" or ":" after the key can hold
+   * a value inside the key, e.g. the private date in "site.private_date2018 01 01". So the key is named only when
+   * "=" or ":" follows it on its line and it looks like a key name, e.g. not the first part of a data row.
    */
-  private static String unknownKeyMessage(String text, String key) {
-    String[] lines = text.split("\\R");
-    for (int index = 0; index < lines.length; index++) {
-      String line = lines[index].strip();
-      if (line.startsWith(key)) {
-        String named = (line.length() > key.length() && key.matches("[A-Za-z0-9_.]+")) ? key + " on " : "";
-        return String.format("The run config key %sline %d is not a known key. Check its spelling in the README.",
-          named, index + 1);
+  private static String unknownKeyMessage(String text, String key) throws IOException {
+    String[] lines = text.split("\\R", -1);
+    for (int first = 0; first < lines.length; first++) {
+      String entry = lines[first].stripLeading();
+      int last = first;
+      if (!entry.startsWith("#") && !entry.startsWith("!")) {
+        while (endsWithContinuation(lines[last]) && last + 1 < lines.length) {
+          last++;
+          entry = entry + "\n" + lines[last];
+        }
       }
+      Properties one = new Properties();
+      one.load(new StringReader(entry));
+      if (one.containsKey(key)) {
+        String afterKey = entry.startsWith(key) ? entry.substring(key.length()).stripLeading() : "";
+        if ((afterKey.startsWith("=") || afterKey.startsWith(":")) && key.matches("[A-Za-z0-9_.]+")) {
+          return String.format("The run config key %s on line %d is not a known key. Check its spelling in the README.",
+            key, first + 1);
+        }
+        return String.format("The run config has a key on line %d that is not a known key. "
+          + "Check the spelling of each key in the README.", first + 1);
+      }
+      first = last;
     }
     return "The run config has a key that is not a known key. Check the spelling of each key in the README.";
+  }
+
+  /** True when a line ends with an odd number of backslashes, so the next line continues it. */
+  private static boolean endsWithContinuation(String line) {
+    int count = 0;
+    for (int index = line.length() - 1; index >= 0 && line.charAt(index) == '\\'; index--) {
+      count++;
+    }
+    return count % 2 == 1;
   }
 
   /**
