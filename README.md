@@ -55,6 +55,8 @@ If you specify `--version`, the program will display the application version and
 
 Note that where files are used for input, they can be specified as a relative or absolute path.
 
+The patient file must have one column for each field. If two columns name the same field (e.g. `dob` and `birthdate`, or `ID` twice), the program stops before it writes any output. The accepted names for each field are in `src/main/resources/configuration/canonical-header-names.csv`.
+
 ### Hashing
 Usage: `java -Djava.library.path=. -jar Hashing-1.0-jar-with-dependencies.jar`
 

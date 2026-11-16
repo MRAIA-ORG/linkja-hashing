@@ -21,14 +21,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Runs the Engine on small synthetic extracts.
+ * Small synthetic extracts. The run_ tests call Engine.run. The hashValues_ test builds the pipeline by hand, see its
+ * javadoc.
  */
 class EngineRunTest {
   // The 11 hash columns in the order Engine.writeDataRowResult writes them, and whether each one is blanked when the
@@ -52,10 +52,34 @@ class EngineRunTest {
   @Test
   void run_TwoColumnsForPatientId_StopsBeforeAnyOutput(@TempDir Path dir) throws Exception {
     // ID is unique, PATIENT_ID repeats P001. Both resolve to patient_id.
-    String extract =
+    assertStopsBeforeAnyOutput(dir,
       "ID,PATIENT_ID,first_name,last_name,date_of_birth\n" +
       "1,P001,Alice,Example,1980-01-15\n" +
-      "2,P001,Robert,Sample,1975-12-02\n";
+      "2,P001,Robert,Sample,1975-12-02\n",
+      "The field patient_id has more than one column: \"ID\" and \"PATIENT_ID\". " +
+      "Keep one column for each field and run again.");
+  }
+
+  @Test
+  void run_SameColumnNameTwiceForPatientId_StopsBeforeAnyOutput(@TempDir Path dir) throws Exception {
+    assertStopsBeforeAnyOutput(dir,
+      "ID,ID,first_name,last_name,dob\n" +
+      "1,P001,Alice,Example,1980-01-15\n" +
+      "2,P001,Robert,Sample,1975-12-02\n",
+      "The field patient_id has more than one column: \"ID\" and \"ID\". " +
+      "Keep one column for each field and run again.");
+  }
+
+  @Test
+  void run_SameColumnNameTwiceForDateOfBirth_StopsBeforeAnyOutput(@TempDir Path dir) throws Exception {
+    assertStopsBeforeAnyOutput(dir,
+      "patient_id,first_name,last_name,dob,dob\n" +
+      "P001,Alice,Example,1980-01-15,1981-02-16\n",
+      "The field date_of_birth has more than one column: \"dob\" and \"dob\". " +
+      "Keep one column for each field and run again.");
+  }
+
+  private static void assertStopsBeforeAnyOutput(Path dir, String extract, String expectedMessage) throws Exception {
     Path patientFile = dir.resolve("patients.csv");
     Files.writeString(patientFile, extract);
     Path outputDir = Files.createDirectory(dir.resolve("out"));
@@ -67,9 +91,7 @@ class EngineRunTest {
     Engine engine = new Engine(parameters, createHashParameters());
 
     LinkjaException exc = assertThrows(LinkjaException.class, engine::run);
-    assertTrue(exc.getMessage().contains(Engine.PATIENT_ID_FIELD), exc.getMessage());
-    assertTrue(exc.getMessage().contains("\"ID\""), exc.getMessage());
-    assertTrue(exc.getMessage().contains("\"PATIENT_ID\""), exc.getMessage());
+    assertEquals(expectedMessage, exc.getMessage());
     try (Stream<Path> files = Files.list(outputDir)) {
       assertEquals(0, files.count());
     }
@@ -77,8 +99,11 @@ class EngineRunTest {
 
   /**
    * The hash file holds createSecureHash(value), and decrypting it gives back the value, so the values compared here
-   * are the decrypted hash values. The test computes them on the same path Engine.run uses, short of the secure hash
-   * step, which needs the secret build of the crypto library.
+   * are the decrypted hash values. This test does not call Engine.run. It sets the Engine's private fields by
+   * reflection and runs these steps on each row: DataHeaderMap.createFromCSVHeader and mergeCanonicalHeaders,
+   * Engine.csvRecordToDataRow, EngineWorkerThread with normalization always on and the default exclusion mode, and
+   * HashingStep. It skips the patient ID check, the secure hash step (it needs the secret build of the crypto library)
+   * and the file writers.
    */
   @Test
   void hashValues_OneColumnPerField_Unchanged() throws Exception {
@@ -101,8 +126,7 @@ class EngineRunTest {
       (HashMap<String, String>) FieldUtils.readStaticField(Engine.class, "canonicalHeaderNames", true);
 
     CSVParser parser = CSVParser.parse(new StringReader(extract), CSVFormat.DEFAULT.builder().setHeader().get());
-    Map<String, Integer> csvHeaderMap = parser.getHeaderMap();
-    DataHeaderMap headerMap = new DataHeaderMap().createFromCSVHeader(csvHeaderMap).mergeCanonicalHeaders(canonicalHeaderNames);
+    DataHeaderMap headerMap = new DataHeaderMap().createFromCSVHeader(parser.getHeaderNames()).mergeCanonicalHeaders(canonicalHeaderNames);
     FieldUtils.writeField(engine, "patientDataHeaderMap", headerMap, true);
 
     List<DataRow> rows = new ArrayList<>();
