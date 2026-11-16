@@ -160,7 +160,8 @@ public class Runner {
    * "=" or ":" follows it on its line and it looks like a key name, e.g. not the first part of a data row.
    */
   private static String unknownKeyMessage(String text, String key) throws IOException {
-    String[] lines = text.split("\\R", -1);
+    // Properties ends a line only at \r, \n or \r\n, so split the same way to count its lines.
+    String[] lines = text.split("\r\n|\r|\n", -1);
     for (int first = 0; first < lines.length; first++) {
       String entry = lines[first].stripLeading();
       int last = first;

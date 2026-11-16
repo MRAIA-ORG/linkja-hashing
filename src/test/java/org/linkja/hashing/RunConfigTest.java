@@ -447,7 +447,7 @@ class RunConfigTest {
 
   @Test
   void unknownKey_AfterByteOrderMark_GivesLineNumber() throws Exception {
-    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("﻿input.date_fromat=dd/MM/uuuu\n"));
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("\uFEFFinput.date_fromat=dd/MM/uuuu\n"));
     assertTrue(exc.getMessage().contains("input.date_fromat on line 1"), exc.getMessage());
   }
 
@@ -456,6 +456,32 @@ class RunConfigTest {
     Exception exc = assertThrows(LinkjaException.class,
       () -> loadConfig("site.salt_file=a\\\n  b\n# note\\\ninput.date_\\\n  fromat=x\n"));
     assertTrue(exc.getMessage().contains("line 4"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_AfterEscapedBackslash_NextLineIsNewEntry() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class,
+      () -> loadConfig("site.salt_file=C:\\\\\ninput.date_fromat=x\n"));
+    assertTrue(exc.getMessage().contains("input.date_fromat on line 2"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_LineAfterContinuedValue_IsNotSearchedAgain() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("site.salt_file=\\\nfoo=1\nfoo=2\n"));
+    assertTrue(exc.getMessage().contains("foo on line 3"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_WithLeadingSpaces_IsNamed() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class, () -> loadConfig("  input.date_fromat=x\n"));
+    assertTrue(exc.getMessage().contains("input.date_fromat on line 1"), exc.getMessage());
+  }
+
+  @Test
+  void unknownKey_AfterNextLineCharInValue_CountsLinesLikeProperties() throws Exception {
+    Exception exc = assertThrows(LinkjaException.class,
+      () -> loadConfig("site.salt_file=a\u0085b\ninput.date_fromat=x\n"));
+    assertTrue(exc.getMessage().contains("input.date_fromat on line 2"), exc.getMessage());
   }
 
   @Test
