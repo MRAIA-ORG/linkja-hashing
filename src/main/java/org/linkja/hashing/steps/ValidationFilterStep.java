@@ -96,6 +96,19 @@ public class ValidationFilterStep implements IStep {
     "123456789"
   };
 
+  private final DateTimeFormatter dateOfBirthFormatter;
+
+  public ValidationFilterStep() {
+    this(DATE_OF_BIRTH_FORMATTER);
+  }
+
+  /**
+   * @param dateOfBirthFormatter The parser for birth dates. Only the dates it reads are valid.
+   */
+  public ValidationFilterStep(DateTimeFormatter dateOfBirthFormatter) {
+    this.dateOfBirthFormatter = dateOfBirthFormatter;
+  }
+
   @Override
   public DataRow run(DataRow row) {
     if (row == null || !row.shouldProcess()) {
@@ -349,7 +362,7 @@ public class ValidationFilterStep implements IStep {
     }
 
     try {
-      LocalDate.parse(dateString.trim(), DATE_OF_BIRTH_FORMATTER);
+      LocalDate.parse(dateString.trim(), dateOfBirthFormatter);
       return true;
     }
     catch (DateTimeParseException exc) {

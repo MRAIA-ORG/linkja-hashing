@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.linkja.core.LinkjaException;
 import org.linkja.hashing.steps.HashingStep;
+import org.linkja.hashing.steps.ValidationFilterStep;
 
 import java.io.InputStream;
 import java.io.StringReader;
@@ -136,7 +137,8 @@ class EngineRunTest {
     rows = new EngineWorkerThread(rows, true, EngineParameters.DEFAULT_RECORD_EXCLUSION_MODE,
       (ArrayList<String>) FieldUtils.readStaticField(Engine.class, "prefixes", true),
       (ArrayList<String>) FieldUtils.readStaticField(Engine.class, "suffixes", true),
-      (HashMap<String, String>) FieldUtils.readStaticField(Engine.class, "genericNames", true)).call();
+      (HashMap<String, String>) FieldUtils.readStaticField(Engine.class, "genericNames", true),
+      ValidationFilterStep.DATE_OF_BIRTH_FORMATTER).call();
 
     HashingStep hashingStep = (HashingStep) FieldUtils.readField(engine, "hashingStep", true);
     List<String> lines = new ArrayList<>();

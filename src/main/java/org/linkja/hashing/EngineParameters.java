@@ -1,6 +1,7 @@
 package org.linkja.hashing;
 
 import org.linkja.core.*;
+import org.linkja.hashing.steps.ValidationFilterStep;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.nio.file.Path;
@@ -8,6 +9,8 @@ import java.security.InvalidParameterException;
 import java.text.ParseException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.ResolverStyle;
+import java.util.Map;
 
 /**
  * This represents a consolidated collection of parameters needed to run the engine.
@@ -42,6 +45,10 @@ public class EngineParameters {
   private boolean runNormalizationStep = DEFAULT_RUN_NORMALIZATION_STEP;
   private FileHelper fileHelper;
   private int minSaltLength = DEFAULT_MIN_SALT_LENGTH;
+  private DateTimeFormatter dateOfBirthFormatter = ValidationFilterStep.DATE_OF_BIRTH_FORMATTER;
+  // Field name (as written after "column." in the run config) to input extract header. Null when the run has no
+  // run config. A run config with no column keys gives an empty map.
+  private Map<String, String> columnMap = null;
 
   public EngineParameters() {
     fileHelper = new FileHelper();
@@ -245,5 +252,33 @@ public class EngineParameters {
 
   public void setMinSaltLength(String minSaltLength) {
     setMinSaltLength((minSaltLength == null) ? -1 : Integer.parseInt(minSaltLength.trim()));
+  }
+
+  /**
+   * Make the birth date parser for one Java date pattern. The pattern needs 'uuuu' for the year, because the parser
+   * uses the strict resolver, as the default parser does.
+   */
+  public static DateTimeFormatter dateOfBirthFormatter(String pattern) {
+    return DateTimeFormatter.ofPattern(pattern).withResolverStyle(ResolverStyle.STRICT);
+  }
+
+  public DateTimeFormatter getDateOfBirthFormatter() {
+    return dateOfBirthFormatter;
+  }
+
+  /**
+   * @param pattern The input.date_format value. When it is null or empty, the default birth date formats apply.
+   */
+  public void setDateFormat(String pattern) {
+    this.dateOfBirthFormatter = (pattern == null || pattern.trim().isEmpty())
+      ? ValidationFilterStep.DATE_OF_BIRTH_FORMATTER : dateOfBirthFormatter(pattern.trim());
+  }
+
+  public Map<String, String> getColumnMap() {
+    return columnMap;
+  }
+
+  public void setColumnMap(Map<String, String> columnMap) {
+    this.columnMap = columnMap;
   }
 }

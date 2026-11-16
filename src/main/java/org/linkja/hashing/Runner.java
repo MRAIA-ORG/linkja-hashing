@@ -6,11 +6,17 @@ import org.apache.commons.cli.*;
 
 import java.io.*;
 import java.nio.file.FileSystems;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Map;
 import java.util.Properties;
+import java.util.TreeMap;
 
 // TODO: Write unit tests for helper methods (everything but main)
 public class Runner {
+  private static final String COLUMN_KEY_PREFIX = "column.";
+
   public static void main(String[] args) {
     Options options = setUpCommandLine();
     CommandLine cmd = parseCommandLine(options, args);
@@ -31,27 +37,9 @@ public class Runner {
     // Our parameters come from the command line and from a local config.properties file.  We split these up under the
     // assumption that those most likely to change across run should be passed in the command line, and those most
     // likely to remain consistent across runs should be in a config.properties file.
-    EngineParameters parameters = new EngineParameters();
+    EngineParameters parameters = null;
     try {
-      // Get the additional parameters that may be set
-      parameters.setSaltFile(cmd.getOptionValue("saltFile"));
-      parameters.setPatientFile(cmd.getOptionValue("patientFile"));
-      parameters.setPrivateDate(cmd.getOptionValue("privateDate"));
-      parameters.setEncryptionKeyFile(cmd.getOptionValue("encryptionKey"));
-      parameters.setDelimiter(cmd.getOptionValue("delimiter", new String(new char[] { EngineParameters.DEFAULT_DELIMITER })));
-      parameters.setRecordExclusionMode(parseRecordExclusionMode(cmd.getOptionValue("exclusionMode")));
-      parameters = loadConfig(parameters);
-      String outputDirectory = cmd.getOptionValue("outDirectory");
-      if (outputDirectory == null || outputDirectory.equals("")) {
-        Path path = FileSystems.getDefault().getPath("").toAbsolutePath();
-        outputDirectory = path.toString();
-        System.out.printf("Results will be written to %s\r\n", outputDirectory);
-      }
-      parameters.setOutputDirectory(outputDirectory);
-
-      if (!parameters.hashingModeOptionsSet()) {
-        throw new LinkjaException("Not all of the required parameters were provided");
-      }
+      parameters = buildParameters(cmd);
     }
     catch (Exception exc) {
       displayUsage();
@@ -90,6 +78,86 @@ public class Runner {
 
     double elapsedSeconds = (double)(endTime - startTime) / 1_000_000_000.0;
     System.out.printf("Total execution time: %2f sec\n", elapsedSeconds);
+  }
+
+  /**
+   * Collect the settings of a hashing run from the command line, the run config (--config) and config.properties.
+   * A command-line flag wins over the same key in the run config.
+   * @param cmd The parsed command line
+   * @return The settings for the engine
+   * @throws Exception When a required setting is missing or invalid. No output file exists yet at this point.
+   */
+  public static EngineParameters buildParameters(CommandLine cmd) throws Exception {
+    Properties runConfig = cmd.hasOption("config") ? loadRunConfig(cmd.getOptionValue("config")) : null;
+    EngineParameters parameters = new EngineParameters();
+    parameters.setSaltFile(requiredSetting(cmd, runConfig, "saltFile", "site.salt_file"));
+    parameters.setPatientFile(requiredSetting(cmd, runConfig, "patientFile", "input.file"));
+    parameters.setPrivateDate(requiredSetting(cmd, runConfig, "privateDate", "site.private_date"));
+    parameters.setEncryptionKeyFile(requiredSetting(cmd, runConfig, "encryptionKey", "aggregator.public_key"));
+    parameters.setDelimiter(setting(cmd, runConfig, "delimiter", "input.delimiter",
+      new String(new char[] { EngineParameters.DEFAULT_DELIMITER })));
+    parameters.setRecordExclusionMode(parseRecordExclusionMode(cmd.getOptionValue("exclusionMode")));
+    parameters = loadConfig(parameters);
+    String outputDirectory = setting(cmd, runConfig, "outDirectory", "output.directory", null);
+    if (outputDirectory == null) {
+      Path path = FileSystems.getDefault().getPath("").toAbsolutePath();
+      outputDirectory = path.toString();
+      System.out.printf("Results will be written to %s\r\n", outputDirectory);
+    }
+    parameters.setOutputDirectory(outputDirectory);
+
+    if (runConfig != null) {
+      parameters.setDateFormat(runConfig.getProperty("input.date_format"));
+      parameters.setColumnMap(columnMap(runConfig));
+    }
+
+    if (!parameters.hashingModeOptionsSet()) {
+      throw new LinkjaException("Not all of the required parameters were provided");
+    }
+    return parameters;
+  }
+
+  /**
+   * Read the run config, a Java Properties (key=value) file.
+   */
+  public static Properties loadRunConfig(String path) throws IOException {
+    Properties runConfig = new Properties();
+    try (Reader reader = Files.newBufferedReader(Paths.get(path))) {
+      runConfig.load(reader);
+    }
+    return runConfig;
+  }
+
+  /**
+   * The value of one setting: the command-line flag if given, else the run config key, else the fallback.
+   */
+  private static String setting(CommandLine cmd, Properties runConfig, String flag, String key, String fallback) {
+    String value = cmd.getOptionValue(flag);
+    if (value == null && runConfig != null) {
+      value = runConfig.getProperty(key);
+    }
+    return (value == null || value.trim().isEmpty()) ? fallback : value.trim();
+  }
+
+  private static String requiredSetting(CommandLine cmd, Properties runConfig, String flag, String key) throws LinkjaException {
+    String value = setting(cmd, runConfig, flag, key, null);
+    if (value == null) {
+      throw new LinkjaException(String.format("The required setting %s is missing. Set it in the run config, or give --%s.", key, flag));
+    }
+    return value;
+  }
+
+  /**
+   * The column keys of the run config: field name (the part after "column.") to input extract header.
+   */
+  private static Map<String, String> columnMap(Properties runConfig) {
+    Map<String, String> columns = new TreeMap<String, String>();
+    for (String key : runConfig.stringPropertyNames()) {
+      if (key.startsWith(COLUMN_KEY_PREFIX)) {
+        columns.put(key.substring(COLUMN_KEY_PREFIX.length()), runConfig.getProperty(key).trim());
+      }
+    }
+    return columns;
   }
 
   public static HashParameters parseProjectSalt(File saltFile, int minSaltLength) throws Exception {
@@ -200,6 +268,10 @@ public class Runner {
     outputDirectoryOpt.setRequired(false);
     options.addOption(outputDirectoryOpt);
 
+    Option configOpt = new Option("config", "config", true, "path to the run config file (key=value)");
+    configOpt.setRequired(false);
+    options.addOption(configOpt);
+
     Option delimiterOpt = new Option("delim", "delimiter", true, "the delimiter used within the patient data file");
     delimiterOpt.setRequired(false);
     options.addOption(delimiterOpt);
@@ -234,7 +306,7 @@ public class Runner {
    */
   public static void displayUsage() {
     System.out.println();
-    System.out.println("Usage: java -jar Hashing.jar [--version]");
+    System.out.println("Usage: java -jar Hashing.jar [--version] [--config <run config file>]");
     System.out.println();
     System.out.println("HASHING (Default Mode)");
     System.out.println("-------------");
@@ -245,7 +317,11 @@ public class Runner {
     System.out.println("  -patient,--patientFile <arg>      Path to the file containing patient data");
     System.out.println("  -salt,--saltFile <arg>            Path to salt file");
     System.out.println();
+    System.out.println("Each required parameter can instead come from the run config (--config).");
+    System.out.println("A parameter on the command line wins over the same key in the run config.");
+    System.out.println();
     System.out.println("Optional parameters:");
+    System.out.println("  -config,--config <arg>            Path to the run config file. See the README.");
     System.out.println("  -out,--outDirectory <arg>         The base directory to create output. If not");
     System.out.println("                                    specified, will use the current directory.");
     System.out.println("  -delim,--delimiter <arg>          The delimiter used within the patient data");

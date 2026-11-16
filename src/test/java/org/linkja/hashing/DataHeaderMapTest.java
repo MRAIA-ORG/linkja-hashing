@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.lang.reflect.Field;
 import org.apache.commons.lang3.reflect.FieldUtils;
 
@@ -196,6 +197,55 @@ class DataHeaderMapTest {
     DataHeaderMap map = new DataHeaderMap().createFromCSVHeader(csvHeader);
     LinkjaException exc = assertThrows(LinkjaException.class, () -> map.mergeCanonicalHeaders(canonicalHeaders));
     assertEquals("The field date_of_birth has more than one column: \"dob\" and \"birthdate\". "
+      + "Keep one column for each field and run again.", exc.getMessage());
+  }
+
+  private static final HashMap<String, String> FIXED_LIST = new HashMap<String, String>() {{
+    put("id", Engine.PATIENT_ID_FIELD);
+    put("patient_id", Engine.PATIENT_ID_FIELD);
+    put("first", Engine.FIRST_NAME_FIELD);
+    put("first_name", Engine.FIRST_NAME_FIELD);
+    put("last", Engine.LAST_NAME_FIELD);
+    put("last_name", Engine.LAST_NAME_FIELD);
+  }};
+
+  private static DataHeaderMap merge(Map<String, String> columnMap, String... headers) throws LinkjaException {
+    return new DataHeaderMap().createFromCSVHeader(List.of(headers)).mergeCanonicalHeaders(FIXED_LIST, columnMap);
+  }
+
+  @Test
+  void columnMap_ColumnKeyWinsOverFixedListHeaderForSameField() throws LinkjaException {
+    DataHeaderMap map = merge(Map.of("patient_id", "PAT_ID"), "ID", "PAT_ID", "first_name");
+    assertEquals(1, map.findIndexOfCanonicalName(Engine.PATIENT_ID_FIELD));
+    assertNull(map.get(0), "The fixed-list header ID is ignored when column.patient_id is set");
+    assertEquals(2, map.findIndexOfCanonicalName(Engine.FIRST_NAME_FIELD));
+  }
+
+  @Test
+  void columnMap_ColumnKeyWinsOverHeaderMappedToOtherField() throws LinkjaException {
+    // Header matching ignores case
+    DataHeaderMap map = merge(Map.of("first_name", "last", "last_name", "first"), "FIRST", "LAST");
+    assertEquals(1, map.findIndexOfCanonicalName(Engine.FIRST_NAME_FIELD));
+    assertEquals(0, map.findIndexOfCanonicalName(Engine.LAST_NAME_FIELD));
+  }
+
+  @Test
+  void columnMap_KeyNamesNoHeader() {
+    LinkjaException exc = assertThrows(LinkjaException.class, () -> merge(Map.of("first_name", "GIVEN"), "ID", "FIRST"));
+    assertTrue(exc.getMessage().contains("column.first_name"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("GIVEN"), exc.getMessage());
+  }
+
+  @Test
+  void columnMap_KeyNamesNoField() {
+    LinkjaException exc = assertThrows(LinkjaException.class, () -> merge(Map.of("nickname", "FIRST"), "ID", "FIRST"));
+    assertTrue(exc.getMessage().contains("column.nickname"), exc.getMessage());
+  }
+
+  @Test
+  void columnMap_TwoColumnsForOneField_Stops() {
+    LinkjaException exc = assertThrows(LinkjaException.class, () -> merge(Map.of(), "ID", "first_name", "PATIENT_ID"));
+    assertEquals("The field patient_id has more than one column: \"ID\" and \"PATIENT_ID\". "
       + "Keep one column for each field and run again.", exc.getMessage());
   }
 }
