@@ -19,14 +19,14 @@ This component allows the aggregator to merge files, disambiguate the hashes and
 ## Building
 linkja-hashing has been tested under Java JDK 25 (specifically [Adoptium Temurin JDK](https://adoptium.net/temurin/releases)).  It can be opened from within an IDE like Eclipse or IntelliJ IDEA and compiled, or compiled from the command line using [Maven](https://maven.apache.org/). Maven downloads the linkja-core and linkja-crypto JARs from [linkja-mvn-repo](https://github.com/MRAIA-ORG/linkja-mvn-repo).
 
-The tests call the linkja C library, so compile it first from the `develop` branch of [linkja-crypto](https://github.com/MRAIA-ORG/linkja-crypto). The tests need only the public build. Running the program at a site needs the secret build of the project. The C library needs OpenSSL 3, CMake and cmocka (e.g. `brew install openssl@3 cmake cmocka`), and CMake needs `JAVA_HOME` set to Java 25. From a linkja-crypto clone beside this one:
+The tests call the linkja C library, so compile it first from the `develop` branch of [linkja-crypto](https://github.com/MRAIA-ORG/linkja-crypto). The tests need only the public build. Running the program at a site needs the secret build of the project. The C library needs OpenSSL 3 and CMake (e.g. `brew install openssl@3 cmake`), and CMake needs `JAVA_HOME` set to Java 25. From a linkja-crypto clone beside this one:
 
 ```
 cmake . -DINCLUDE_SECRETS=OFF -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
 make linkjacrypto
 ```
 
-On Linux, install `libssl-dev cmake libcmocka-dev` and leave out `-DOPENSSL_ROOT_DIR`.
+On Linux, install `libssl-dev cmake` and leave out `-DOPENSSL_ROOT_DIR`.
 
 Then, from this folder:
 
