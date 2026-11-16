@@ -16,6 +16,7 @@ import org.linkja.core.*;
 import java.io.*;
 import java.net.URISyntaxException;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
@@ -249,11 +250,11 @@ public class Engine {
 
       try {
         try {
-          hashStream = new BufferedOutputStream(Files.newOutputStream(hashPath, NEW_FILE));
+          hashStream = new BufferedOutputStream(openOutput(hashPath));
           createdPaths.add(hashPath);
-          crosswalkWriter = Files.newBufferedWriter(crosswalkPath, NEW_FILE);
+          crosswalkWriter = openWriter(crosswalkPath);
           createdPaths.add(crosswalkPath);
-          invalidDataWriter = Files.newBufferedWriter(invalidDataPath, NEW_FILE);
+          invalidDataWriter = openWriter(invalidDataPath);
           createdPaths.add(invalidDataPath);
         } catch (FileAlreadyExistsException exc) {
           throw new LinkjaException(String.format("The output file %s is already there. Move it out of the output folder, and run again.", exc.getFile()));
@@ -301,13 +302,9 @@ public class Engine {
             // As we submit a new batch to be worked on, we will look to see if we're exceeding the number of threads we
             // wanted to have running.  If so, we'll start clearing up results (if they are done) and writing them up, which
             // will keep memory usage manageable.
+            // A problem here throws, so the finally block below stops the work and removes the files.
             while (((ThreadPoolExecutor) threadPool).getActiveCount() >= numThreads) {
-              if (!processPendingWork(taskQueue, hashStream, sessionKey, crosswalkPrinter, invalidDataPrinter, false)) {
-                // If there was a problem during the middle of the processing cycle, we have to stop work since we can't
-                // rely on our results.
-                threadPool.shutdownNow();
-                return;
-              }
+              processPendingWork(taskQueue, hashStream, sessionKey, crosswalkPrinter, invalidDataPrinter, false);
             }
           }
         }
@@ -321,34 +318,32 @@ public class Engine {
           this.numSubmittedJobs++;
         }
 
-        boolean finalProcessSucceeded = processPendingWork(taskQueue, hashStream, sessionKey, crosswalkPrinter, invalidDataPrinter, true);
+        processPendingWork(taskQueue, hashStream, sessionKey, crosswalkPrinter, invalidDataPrinter, true);
         closeWriters(hashStream, crosswalkWriter, invalidDataWriter);
 
-        if (finalProcessSucceeded) {
-          // Everything worked out okay.  Because it isn't until the end that we know the total number of rows written,
-          // this is where we need to update the metadata in our output file to include the total number of rows.
-          int totalHashedRows = (this.numInputRows - this.numInvalidRows + this.numDerivedRows);
-          if (metadata != null) {
-            metadata.setNumHashRows(totalHashedRows);
-            metadata.writeUpdatedNumHashRows(hashPath.toFile());
-          }
-
-          executionReport.add("Completed processing results:");
-          executionReport.add(String.format("  %d data rows read", this.numInputRows));
-          executionReport.add(String.format("  %d total hashed rows created", totalHashedRows));
-          executionReport.add(String.format("     %d original data rows hashed", (totalHashedRows - this.numDerivedRows)));
-          executionReport.add(String.format("     %d derived rows hashed", this.numDerivedRows));
-          executionReport.add(String.format("  %d invalid rows", this.numInvalidRows));
+        // Everything worked out okay.  Because it isn't until the end that we know the total number of rows written,
+        // this is where we need to update the metadata in our output file to include the total number of rows.
+        int totalHashedRows = (this.numInputRows - this.numInvalidRows + this.numDerivedRows);
+        if (metadata != null) {
+          metadata.setNumHashRows(totalHashedRows);
+          metadata.writeUpdatedNumHashRows(hashPath.toFile());
         }
+
+        executionReport.add("Completed processing results:");
+        executionReport.add(String.format("  %d data rows read", this.numInputRows));
+        executionReport.add(String.format("  %d total hashed rows created", totalHashedRows));
+        executionReport.add(String.format("     %d original data rows hashed", (totalHashedRows - this.numDerivedRows)));
+        executionReport.add(String.format("     %d derived rows hashed", this.numDerivedRows));
+        executionReport.add(String.format("  %d invalid rows", this.numInvalidRows));
 
         threadPool.shutdown();
 
         // Ensure at this point (as a final sanity check) that all of our submitted jobs have been tracked to completion
         if (this.numCompletedJobs != this.numSubmittedJobs) {
-          throw new LinkjaException(String.format("We are missing %d jobs - expected %d, tracked %d to completion.\r\nThe incomplete output files have been removed.",
+          throw new LinkjaException(String.format("We are missing %d jobs - expected %d, tracked %d to completion.",
                   (this.numSubmittedJobs - this.numCompletedJobs), this.numSubmittedJobs, this.numCompletedJobs));
         }
-        finished = finalProcessSucceeded;
+        finished = true;
       } catch (Throwable exc) {
         failure = exc;
         throw exc;
@@ -359,6 +354,18 @@ public class Engine {
         }
       }
     }
+  }
+
+  /**
+   * Open one new output file. Package-private so that a test can see when a run closes its files, or make a close fail.
+   */
+  OutputStream openOutput(Path path) throws IOException {
+    return Files.newOutputStream(path, NEW_FILE);
+  }
+
+  /** A UTF-8 writer on openOutput(path). It is the writer that Files.newBufferedWriter(path, NEW_FILE) gives. */
+  private BufferedWriter openWriter(Path path) throws IOException {
+    return new BufferedWriter(new OutputStreamWriter(openOutput(path), StandardCharsets.UTF_8.newEncoder()));
   }
 
   /** The worker thread pool of one run. Package-private so that a test can check that a run shuts it down. */
@@ -416,11 +423,11 @@ public class Engine {
    * @param crosswalkPrinter
    * @param invalidDataPrinter
    * @param waitUntilComplete
-   * @return true if the work was processed, false if there was an error
+   * @throws LinkjaException When a worker or the writing of a result fails. The message names the failure.
    */
-  private boolean processPendingWork(ExecutorCompletionService<List<DataRow>> taskQueue, BufferedOutputStream hashStream,
+  private void processPendingWork(ExecutorCompletionService<List<DataRow>> taskQueue, BufferedOutputStream hashStream,
                                      byte[] sessionKey, CSVPrinter crosswalkPrinter, CSVPrinter invalidDataPrinter,
-                                     boolean waitUntilComplete) {
+                                     boolean waitUntilComplete) throws LinkjaException {
     try {
       // Go through at least once to check the status of our jobs and process pending results.  If the flag has been
       // set to wait until everything is completed, we will stay in a loop checking for completed work.
@@ -429,7 +436,7 @@ public class Engine {
         // set a polling timeout.
         if (this.numCompletedJobs == this.numSubmittedJobs) {
           System.out.println("All jobs have been processed");
-          return true;
+          return;
         }
 
         Future<List<DataRow>> task = taskQueue.poll(500, TimeUnit.MILLISECONDS);
@@ -447,13 +454,13 @@ public class Engine {
       } while (waitUntilComplete);
     }
     catch (Exception exc) {
-      executionReport.add("An exception was thrown while writing out the results.  The incomplete output files were removed.");
-      executionReport.add(exc.getMessage());
-      exc.printStackTrace();
-      return false;
+      // A worker failure comes wrapped in an ExecutionException. Name the failure inside it.
+      Throwable cause = (exc instanceof ExecutionException && exc.getCause() != null) ? exc.getCause() : exc;
+      String reason = (cause.getMessage() != null) ? cause.getMessage() : cause.toString();
+      LinkjaException stop = new LinkjaException("The run stopped while writing the results: " + reason);
+      stop.initCause(exc);
+      throw stop;
     }
-
-    return true;
   }
 
   /**
