@@ -4,6 +4,7 @@ import org.linkja.core.*;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
+import java.util.List;
 import java.lang.reflect.Field;
 import org.apache.commons.lang3.reflect.FieldUtils;
 
@@ -20,22 +21,18 @@ class DataHeaderMapTest {
   @Test
   void createFromCSVHeader_Empty() {
     DataHeaderMap map = new DataHeaderMap();
-    assertEquals(0, map.createFromCSVHeader(new HashMap<String, Integer>()).size());
+    assertEquals(0, map.createFromCSVHeader(List.of()).size());
   }
 
   @Test
   void createFromCSVHeader_Values() {
     DataHeaderMap map = new DataHeaderMap();
-    HashMap<String, Integer> csvHeader = new HashMap<String, Integer>() {{
-      put("test", 0);
-      put("values", 1);
-      put ("here", 2);
-    }};
+    List<String> csvHeader = List.of("test", "values", "here");
     map.createFromCSVHeader(csvHeader);
     assertEquals(csvHeader.size(), map.size());
     for (int index = 0; index < map.size(); index++) {
       DataHeaderMapEntry entry = map.get(index);
-      assert(csvHeader.get(entry.getOriginalName()) == entry.getHeaderIndex());
+      assertEquals(csvHeader.get(entry.getHeaderIndex()), entry.getOriginalName());
       assertNull(entry.getCanonicalName());
     }
   }
@@ -60,11 +57,7 @@ class DataHeaderMapTest {
   @Test
   void mergeCanonicalHeaders_Mismatch() throws LinkjaException {
     DataHeaderMap map = new DataHeaderMap();
-    HashMap<String, Integer> csvHeader = new HashMap<String, Integer>() {{
-      put("test", 0);
-      put("values", 1);
-      put("here", 2);
-    }};
+    List<String> csvHeader = List.of("test", "values", "here");
     HashMap<String, String> canonicalHeader = new HashMap<String, String>() {{
       put("tests", "test_0");
       put("value", "values_1");
@@ -86,11 +79,7 @@ class DataHeaderMapTest {
   @Test
   void mergeCanonicalHeaders_AllMatches() throws LinkjaException {
     DataHeaderMap map = new DataHeaderMap();
-    HashMap<String, Integer> csvHeader = new HashMap<String, Integer>() {{
-      put("TEST", 0);
-      put(" VALUES ", 1);
-      put(" HeRe", 2);
-    }};
+    List<String> csvHeader = List.of("TEST", " VALUES ", " HeRe");
     HashMap<String, String> canonicalHeader = new HashMap<String, String>() {{
       put("test", "test_0");
       put("values", "values_1");
@@ -100,7 +89,7 @@ class DataHeaderMapTest {
     assertEquals(csvHeader.size(), map.size());
     for (int index = 0; index < map.size(); index++) {
       DataHeaderMapEntry entry = map.get(index);
-      assert(csvHeader.get(entry.getOriginalName()) == entry.getHeaderIndex());
+      assertEquals(csvHeader.get(entry.getHeaderIndex()), entry.getOriginalName());
       assert(canonicalHeader.get(entry.getOriginalName().toLowerCase().trim()) == entry.getCanonicalName());
     }
   }
@@ -180,5 +169,33 @@ class DataHeaderMapTest {
     DataHeaderMap map = new DataHeaderMap();
 	FieldUtils.writeField(map.getClass().getDeclaredField("entries"), map, data, true);
     assert(map.containsCanonicalColumn("other_id"));
+  }
+
+  @Test
+  void mergeCanonicalHeaders_TwoColumnsForOneField() {
+    List<String> csvHeader = List.of("ID", "PATIENT_ID", "first_name");
+    HashMap<String, String> canonicalHeaders = new HashMap<String, String>() {{
+      put("id", "patient_id");
+      put("patient_id", "patient_id");
+      put("first_name", "first_name");
+    }};
+    DataHeaderMap map = new DataHeaderMap().createFromCSVHeader(csvHeader);
+    LinkjaException exc = assertThrows(LinkjaException.class, () -> map.mergeCanonicalHeaders(canonicalHeaders));
+    assertEquals("The field patient_id has more than one column: \"ID\" and \"PATIENT_ID\". "
+      + "Keep one column for each field and run again.", exc.getMessage());
+  }
+
+  @Test
+  void mergeCanonicalHeaders_TwoColumnsForDateOfBirth() {
+    List<String> csvHeader = List.of("dob", "first_name", "birthdate");
+    HashMap<String, String> canonicalHeaders = new HashMap<String, String>() {{
+      put("dob", "date_of_birth");
+      put("birthdate", "date_of_birth");
+      put("first_name", "first_name");
+    }};
+    DataHeaderMap map = new DataHeaderMap().createFromCSVHeader(csvHeader);
+    LinkjaException exc = assertThrows(LinkjaException.class, () -> map.mergeCanonicalHeaders(canonicalHeaders));
+    assertEquals("The field date_of_birth has more than one column: \"dob\" and \"birthdate\". "
+      + "Keep one column for each field and run again.", exc.getMessage());
   }
 }

@@ -18,14 +18,19 @@ public class DataHeaderMap {
     this.entries = new HashMap<Integer, DataHeaderMapEntry>();
   }
 
-  public DataHeaderMap createFromCSVHeader(Map<String, Integer> csvHeader) {
-    if (csvHeader == null) {
+  /**
+   * Load the header, one entry per column.
+   * @param headerNames The column names in file order, e.g. CSVParser.getHeaderNames(). A name may repeat. Do not pass
+   *                    the keys of CSVParser.getHeaderMap(): that map keeps one column per name and drops the rest.
+   * @return This map, or null if headerNames is null
+   */
+  public DataHeaderMap createFromCSVHeader(List<String> headerNames) {
+    if (headerNames == null) {
       return null;
     }
 
-    for (Map.Entry<String, Integer> entry : csvHeader.entrySet()) {
-      Integer index = entry.getValue();
-      this.entries.put(index, new DataHeaderMapEntry(index, entry.getKey()));
+    for (int index = 0; index < headerNames.size(); index++) {
+      this.entries.put(index, new DataHeaderMapEntry(index, headerNames.get(index)));
     }
 
     return this;
@@ -33,9 +38,11 @@ public class DataHeaderMap {
 
   /**
    * Merge in the canonical header mapping so that all of our entries have a mapped canonical header (if one exists).
-   * @param canonicalHeaders
-   * @return
-   * @throws LinkjaException
+   * Call it once, with the full mapping. Two columns for one field are found only within one call. If it throws, some
+   * entries may already have their canonical name set, so do not use the map after an exception.
+   * @param canonicalHeaders Key: a column name, trimmed and in lowercase. Value: the canonical field name.
+   * @return This map
+   * @throws LinkjaException If no headers are loaded, or if two columns map to one canonical field
    */
   public DataHeaderMap mergeCanonicalHeaders(Map<String, String> canonicalHeaders) throws LinkjaException {
     if (canonicalHeaders == null) {
@@ -46,11 +53,19 @@ public class DataHeaderMap {
       throw new LinkjaException("You must load the list of headers before merging in the canonical headers");
     }
 
-    for (Map.Entry<Integer, DataHeaderMapEntry> entry : this.entries.entrySet()) {
-      Integer index = entry.getKey();
-      String originalName = entry.getValue().getOriginalName().trim().toLowerCase();
+    // One column per field. With two, the patient ID check and the hash could read different columns, so we stop.
+    HashMap<String, DataHeaderMapEntry> columnForField = new HashMap<String, DataHeaderMapEntry>();
+    for (DataHeaderMapEntry entry : new TreeMap<Integer, DataHeaderMapEntry>(this.entries).values()) {
+      String originalName = entry.getOriginalName().trim().toLowerCase();
       if (canonicalHeaders.containsKey(originalName)) {
-        this.entries.get(index).setCanonicalName(canonicalHeaders.get(originalName));
+        String canonicalName = canonicalHeaders.get(originalName);
+        DataHeaderMapEntry other = columnForField.putIfAbsent(canonicalName, entry);
+        if (other != null) {
+          throw new LinkjaException(String.format(
+            "The field %s has more than one column: \"%s\" and \"%s\". Keep one column for each field and run again.",
+            canonicalName, other.getOriginalName(), entry.getOriginalName()));
+        }
+        entry.setCanonicalName(canonicalName);
       }
     }
 

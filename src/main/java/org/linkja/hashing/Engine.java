@@ -200,8 +200,7 @@ public class Engine {
 							.setDelimiter(this.parameters.getDelimiter())
 							.get();
 	  CSVParser parser = CSVParser.parse(csvReader, format);
-      Map<String, Integer> csvHeaderMap = parser.getHeaderMap();
-      this.patientDataHeaderMap.createFromCSVHeader(csvHeaderMap).mergeCanonicalHeaders(this.canonicalHeaderNames);
+      this.patientDataHeaderMap.createFromCSVHeader(parser.getHeaderNames()).mergeCanonicalHeaders(this.canonicalHeaderNames);
       verifyFields();
 
       // Because our check for unique patient IDs requires knowing every ID that has been seen, and because our processing
