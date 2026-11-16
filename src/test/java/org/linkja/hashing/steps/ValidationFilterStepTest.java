@@ -5,6 +5,8 @@ import org.linkja.hashing.DataRow;
 import org.linkja.hashing.Engine;
 import org.linkja.hashing.EngineParameters;
 
+import java.time.LocalDate;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class ValidationFilterStepTest {
@@ -316,6 +318,28 @@ class ValidationFilterStepTest {
     // MMdduuuu is in the default pattern, but the uuuuMMdd section reads these 8 digits first, so today it fails.
     // This test keeps today's behavior. Fixing it changes which rows hash, so it is its own ticket.
     assertFalse(step.isValidDateFormat("02032001"));
+    assertFalse(step.isValidDateFormat("12312001"));
+  }
+
+  @Test
+  void dateOfBirthFormatter_ReadmeFormatsReadTheSameDateWithAndWithoutTime() {
+    // Each example in the README list of default birth date formats is 3 February 2001.
+    String[] examples = {"2001/2/3", "2001-2-3", "2001 2 3", "20010203", "2/3/2001", "2-3-2001", "2 3 2001"};
+    LocalDate expected = LocalDate.of(2001, 2, 3);
+    for (String example : examples) {
+      for (String time : new String[] {"", " 13:02", " 13:02:03"}) {
+        assertEquals(expected, LocalDate.parse(example + time, ValidationFilterStep.DATE_OF_BIRTH_FORMATTER),
+                example + time);
+      }
+    }
+  }
+
+  @Test
+  void dateOfBirthFormatter_PinsCurrentBehavior_DateTimeThenSameDateAsMMdduuuuReads() {
+    // The [MMdduuuu] section reads only digits left over after a date with a time. This odd case reads today.
+    // Hashing output must not change, so this test fails if a pattern change makes it stop reading.
+    assertEquals(LocalDate.of(2001, 12, 31),
+            LocalDate.parse("12/31/2001 23:59:5912312001", ValidationFilterStep.DATE_OF_BIRTH_FORMATTER));
   }
 
   @Test

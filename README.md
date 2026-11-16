@@ -146,6 +146,15 @@ Rules:
 * `output.directory` and `--outDirectory` are the same setting. Without either, the output goes to the current directory.
 * A relative path is read from the folder where you run `java`. Write paths with `/`. In a Properties file, `\` starts an escape, so `C:\keys\salt.txt` does not read as you expect. `C:/keys/salt.txt` works.
 * `input.date_format` is the format of the birth date, as a Java date pattern. Use `uuuu` for the year (e.g. `uuuu/MM/dd`), because the date parser is strict. A time of day after the date is allowed, e.g. `dd/MM/uuuu HH:mm`. When it is set, only that format is accepted. Without it, the default birth date formats apply. A pattern that cannot read a full date back unchanged stops the run, e.g. `yyyy/MM/dd` or the two-digit year `dd/MM/uu`.
+* Without `input.date_format`, a birth date reads in any of these formats. Each one can have a time after it, e.g. `2001/2/3 13:02` or `2001/2/3 13:02:03`.
+  * `uuuu/M/d`, e.g. `2001/2/3`
+  * `uuuu-M-d`, e.g. `2001-2-3`
+  * `uuuu M d`, e.g. `2001 2 3`
+  * `uuuuMMdd`, e.g. `20010203`
+  * `M/d/uuuu`, e.g. `2/3/2001`
+  * `M-d-uuuu`, e.g. `2-3-2001`
+  * `M d uuuu`, e.g. `2 3 2001`
+* The 8 digits `MMdduuuu` on their own do not read, e.g. `02032001` is read as year 0203, month 20, and is rejected.
 * A `column.<field>=<header>` key names the column of the input extract that gives the field. The field can be any name in the `alias_name` column of `src/main/resources/configuration/canonical-header-names.csv`, e.g. `column.patient_id`, `column.first_name`, `column.last_name`, `column.birth_date` (or `column.dob`) and `column.ssn`. The field name ignores case, e.g. `column.FIRST_NAME` is the same as `column.first_name`. Header matching ignores case.
 * For each field, the `column.` key wins over the fixed header list (`src/main/resources/configuration/canonical-header-names.csv`), even when that list maps the header to another field. The other columns that the list maps to that field are ignored.
 * The fixed header list is used only for a field with no `column.` key.
