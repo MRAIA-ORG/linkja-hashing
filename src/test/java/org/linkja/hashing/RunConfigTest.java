@@ -542,7 +542,7 @@ class RunConfigTest {
         return secureHash;
       }
     }.run();
-    return decryptHashFile(parameters.getOutputDirectory());
+    return decryptHashFile(parameters.getOutputDirectory(), privateKey);
   }
 
   private static String[] flagArgs(Path extract, Path out) {
@@ -589,7 +589,7 @@ class RunConfigTest {
    * Reads the one hash file in the folder, and returns each row of hash values as one string, sorted. The session key
    * comes out of the RSA envelope. The hash values need no reverting, because the test stubs createSecureHash.
    */
-  private static List<String> decryptHashFile(Path out) throws Exception {
+  static List<String> decryptHashFile(Path out, Path privateKey) throws Exception {
     File hashFile;
     try (Stream<Path> files = Files.list(out)) {
       List<Path> hashFiles = files.filter(p -> p.getFileName().toString().startsWith("hashes_")).collect(Collectors.toList());

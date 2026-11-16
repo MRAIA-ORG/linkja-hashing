@@ -16,9 +16,12 @@ import org.linkja.core.*;
 import java.io.*;
 import java.net.URISyntaxException;
 import java.nio.charset.Charset;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -34,6 +37,9 @@ public class Engine {
   public static final int SESSION_KEY_LENGTH = 32;
 
   private static final String EMPTY_HASH = "";
+
+  // Open options of the output files: a run fails, and does not change the file, when a file of that name is there.
+  private static final OpenOption[] NEW_FILE = { StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE };
 
   // List the canonical names for anticipated fields
   public static final String PATIENT_ID_FIELD = "patient_id";
@@ -210,8 +216,7 @@ public class Engine {
 
       // Build our thread pool and task queue - these are configured with a set number of threads (that the user can define),
       // and will run such that that number of threads is the total amount of work we have queued up.
-      ExecutorService threadPool = new ThreadPoolExecutor(parameters.getNumWorkerThreads(), parameters.getNumWorkerThreads(),30,TimeUnit.MINUTES,
-              new ArrayBlockingQueue<Runnable>(parameters.getNumWorkerThreads()), new ThreadPoolExecutor.CallerRunsPolicy());
+      ExecutorService threadPool = createThreadPool(parameters.getNumWorkerThreads());
       ExecutorCompletionService<List<DataRow>> taskQueue = new ExecutorCompletionService<List<DataRow>>(threadPool);
 
       // Open up our output streams for hash results, crosswalks and invalid results.  We may have an optional 4th file
@@ -219,19 +224,20 @@ public class Engine {
       String fileTimestamp = LocalDateTime.now().format(fileTimestampFormatter);
       Path hashPath = Paths.get(this.parameters.getOutputDirectory().toString(),
               String.format("hashes_%s_%s_%s.enc", hashParameters.getSiteId(), hashParameters.getProjectId(), fileTimestamp));
-      BufferedOutputStream hashStream = new BufferedOutputStream(Files.newOutputStream(hashPath));
-
       Path crosswalkPath = Paths.get(this.parameters.getOutputDirectory().toString(),
               String.format("DONOTSEND_crosswalk_%s_%s_%s.csv", hashParameters.getSiteId(), hashParameters.getProjectId(), fileTimestamp));
-      BufferedWriter crosswalkWriter = Files.newBufferedWriter(crosswalkPath);
-      CSVPrinter crosswalkPrinter = createCrosswalkPrinter(crosswalkWriter);
-
       Path invalidDataPath = Paths.get(this.parameters.getOutputDirectory().toString(),
               String.format("DONOTSEND_invaliddata_%s_%s_%s.csv", hashParameters.getSiteId(), hashParameters.getProjectId(), fileTimestamp));
-      BufferedWriter invalidDataWriter = Files.newBufferedWriter(invalidDataPath);
-      CSVPrinter invalidDataPrinter = createInvalidDataPrinter(invalidDataWriter);
 
-      Path[] allFilePaths = new Path[] { hashPath, crosswalkPath, invalidDataPath };
+      // Each output file is opened only if it is not there yet, so every file in createdPaths is this run's own. If the
+      // run does not finish, the finally block below stops the workers, closes the files and removes those files, so a
+      // partial file is never taken for a finished one.
+      List<Path> createdPaths = new ArrayList<>();
+      BufferedOutputStream hashStream = null;
+      BufferedWriter crosswalkWriter = null;
+      BufferedWriter invalidDataWriter = null;
+      boolean finished = false;
+      Throwable failure = null;
 
       // Reset all of our tracking counters right before we begin the processing cycle
       this.numSubmittedJobs = 0;
@@ -242,6 +248,19 @@ public class Engine {
       this.outputRowIndex = 0;
 
       try {
+        try {
+          hashStream = new BufferedOutputStream(Files.newOutputStream(hashPath, NEW_FILE));
+          createdPaths.add(hashPath);
+          crosswalkWriter = Files.newBufferedWriter(crosswalkPath, NEW_FILE);
+          createdPaths.add(crosswalkPath);
+          invalidDataWriter = Files.newBufferedWriter(invalidDataPath, NEW_FILE);
+          createdPaths.add(invalidDataPath);
+        } catch (FileAlreadyExistsException exc) {
+          throw new LinkjaException(String.format("The output file %s is already there. Move it out of the output folder, and run again.", exc.getFile()));
+        }
+        CSVPrinter crosswalkPrinter = createCrosswalkPrinter(crosswalkWriter);
+        CSVPrinter invalidDataPrinter = createInvalidDataPrinter(invalidDataWriter);
+
         byte[] sessionKey = Library.generateKey(SESSION_KEY_LENGTH);
         EncryptedHashFileMetadata metadata = initializeHashStream(hashStream, sessionKey, parameters.getEncryptionKeyFile());
 
@@ -255,8 +274,6 @@ public class Engine {
           // probably could, but we're delegating all of that work to our worker steps.
           if (!patientId.equals("")) {
             if (uniquePatientIds.contains(patientId)) {
-              closeWriters(hashStream, crosswalkWriter, invalidDataWriter);
-              deleteOutputFiles(allFilePaths);
               threadPool.shutdownNow();
               throw new LinkjaException(String.format("Patient IDs must be unique within the data file.  A duplicate copy of Patient ID %s was found on row %d.",
                 patientId.trim(), csvRecord.getRecordNumber()));
@@ -289,8 +306,6 @@ public class Engine {
                 // If there was a problem during the middle of the processing cycle, we have to stop work since we can't
                 // rely on our results.
                 threadPool.shutdownNow();
-                closeWriters(hashStream, crosswalkWriter, invalidDataWriter);
-                deleteOutputFiles(allFilePaths);
                 return;
               }
             }
@@ -324,40 +339,73 @@ public class Engine {
           executionReport.add(String.format("     %d original data rows hashed", (totalHashedRows - this.numDerivedRows)));
           executionReport.add(String.format("     %d derived rows hashed", this.numDerivedRows));
           executionReport.add(String.format("  %d invalid rows", this.numInvalidRows));
-        } else {
-          deleteOutputFiles(allFilePaths);
         }
 
         threadPool.shutdown();
+
+        // Ensure at this point (as a final sanity check) that all of our submitted jobs have been tracked to completion
+        if (this.numCompletedJobs != this.numSubmittedJobs) {
+          throw new LinkjaException(String.format("We are missing %d jobs - expected %d, tracked %d to completion.\r\nThe incomplete output files have been removed.",
+                  (this.numSubmittedJobs - this.numCompletedJobs), this.numSubmittedJobs, this.numCompletedJobs));
+        }
+        finished = finalProcessSucceeded;
+      } catch (Throwable exc) {
+        failure = exc;
+        throw exc;
       } finally {
-
+        if (!finished) {
+          threadPool.shutdownNow();
+          removeUnfinishedOutput(new Closeable[] { hashStream, crosswalkWriter, invalidDataWriter }, createdPaths, failure);
+        }
       }
-
-      // Ensure at this point (as a final sanity check) that all of our submitted jobs have been tracked to completion
-      if (this.numCompletedJobs != this.numSubmittedJobs) {
-        throw new LinkjaException(String.format("We are missing %d jobs - expected %d, tracked %d to completion.\r\nThe unencrypted hash files have been preserved, but are incomplete.",
-                (this.numSubmittedJobs - this.numCompletedJobs), this.numSubmittedJobs, this.numCompletedJobs));
-      }
-
     }
   }
 
-  /**
-   * Delete all output files that were established.  This is a helper method, so it assumes we know the files are there
-   * and can be deleted.
-   * @param paths
-   * @throws IOException
-   */
-  private void deleteOutputFiles(Path[] paths) throws IOException {
-    if (paths == null || paths.length == 0) {
-      return;
-    }
+  /** The worker thread pool of one run. Package-private so that a test can check that a run shuts it down. */
+  ExecutorService createThreadPool(int numThreads) {
+    return new ThreadPoolExecutor(numThreads, numThreads, 30, TimeUnit.MINUTES,
+            new ArrayBlockingQueue<Runnable>(numThreads), new ThreadPoolExecutor.CallerRunsPolicy());
+  }
 
-    for(Path path : paths) {
-      if (path != null) {
-        Files.delete(path);
+  /**
+   * Close the output files of a run that did not finish, and remove the ones the run made. Each file is closed and
+   * removed on its own, so one failure does not stop the others. When the run stopped on an error, a failure here is
+   * added to that error as a suppressed exception, so it does not hide it. Otherwise the first failure is thrown.
+   */
+  private static void removeUnfinishedOutput(Closeable[] files, List<Path> createdPaths, Throwable failure) throws IOException {
+    IOException problem = null;
+    for (Closeable file : files) {
+      try {
+        if (file != null) {
+          file.close();
+        }
+      } catch (IOException exc) {
+        problem = addProblem(problem, exc, failure);
       }
     }
+    for (Path path : createdPaths) {
+      try {
+        Files.deleteIfExists(path);
+      } catch (IOException exc) {
+        problem = addProblem(problem, exc, failure);
+      }
+    }
+    if (problem != null) {
+      throw problem;
+    }
+  }
+
+  /** Adds exc to failure when there is one (and returns null), else to problem. Returns the problem to throw. */
+  private static IOException addProblem(IOException problem, IOException exc, Throwable failure) {
+    if (failure != null) {
+      failure.addSuppressed(exc);
+      return null;
+    }
+    if (problem == null) {
+      return exc;
+    }
+    problem.addSuppressed(exc);
+    return problem;
   }
 
   /**
@@ -399,7 +447,7 @@ public class Engine {
       } while (waitUntilComplete);
     }
     catch (Exception exc) {
-      executionReport.add("An exception was thrown while writing out the results.  The output file is incomplete and should not be used.");
+      executionReport.add("An exception was thrown while writing out the results.  The incomplete output files were removed.");
       executionReport.add(exc.getMessage());
       exc.printStackTrace();
       return false;
