@@ -58,6 +58,10 @@ class EngineRunTest {
   private static final int SAME_NAME_WINDOW_SECONDS = 30;
   private static final String EARLIER_RUN = "earlier run";
 
+  // Enough rows in small batches that the read loop is still running when the first batch fails.
+  private static final int MID_RUN_ROWS = 5000;
+  private static final int MID_RUN_BATCH_SIZE = 100;
+
   private static final String ONE_COLUMN_PER_FIELD =
     "patient_id,first_name,last_name,date_of_birth,social_security_number\n" +
     "P001,Alice,Example,1980-01-15,234-56-7890\n" +
@@ -112,18 +116,18 @@ class EngineRunTest {
 
   /**
    * Ticket #96. A run never opens a file that is already there, so a file from an earlier run with the name this run
-   * picks is not changed. The run stops with a message that names the file. The name has the time to the second, so
-   * the test makes such files for SAME_NAME_WINDOW_SECONDS.
+   * picks is not changed. The run stops with a message that names the file, and removes the files it made before the
+   * clash. Each case makes one of the three names, so the clash is on the first, second or third open. The name has the
+   * time to the second, so the test makes such files for SAME_NAME_WINDOW_SECONDS.
    */
-  @Test
-  void run_SecureHashThrows_KeepsFileWithSameName(@TempDir Path dir) throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = { "hashes_%s.enc", "DONOTSEND_crosswalk_%s.csv", "DONOTSEND_invaliddata_%s.csv" })
+  void run_EarlierFileWithSameName_StopsAndKeepsIt(String namePattern, @TempDir Path dir) throws Exception {
     Path outputDir = Files.createDirectory(dir.resolve("out"));
     LocalDateTime now = LocalDateTime.now();
     for (int second = 0; second < SAME_NAME_WINDOW_SECONDS; second++) {
       String name = "site1_project1_" + now.plusSeconds(second).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
-      Files.writeString(outputDir.resolve("hashes_" + name + ".enc"), EARLIER_RUN);
-      Files.writeString(outputDir.resolve("DONOTSEND_crosswalk_" + name + ".csv"), EARLIER_RUN);
-      Files.writeString(outputDir.resolve("DONOTSEND_invaliddata_" + name + ".csv"), EARLIER_RUN);
+      Files.writeString(outputDir.resolve(String.format(namePattern, name)), EARLIER_RUN);
     }
     Set<Path> before = listFiles(outputDir);
 
@@ -134,6 +138,32 @@ class EngineRunTest {
     for (Path file : before) {
       assertEquals(EARLIER_RUN, Files.readString(file), file.toString());
     }
+  }
+
+  /**
+   * Ticket #96. With many rows, small batches and one worker thread, the secure hash step fails while rows are still
+   * being read, so the run stops in the middle of the read loop. It must still remove the files it made. That route
+   * returns without an exception today (ticket #99). An exception here means the run took another route.
+   */
+  @Test
+  void run_SecureHashThrowsMidRun_RemovesFilesItMade(@TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    StringBuilder extract = new StringBuilder("patient_id,first_name,last_name,date_of_birth,social_security_number\n");
+    for (int row = 0; row < MID_RUN_ROWS; row++) {
+      extract.append("P").append(row).append(",Alice,Example,1980-01-15,234-56-7890\n");
+    }
+    EngineParameters parameters = runParameters(dir, outputDir, extract.toString());
+    parameters.setBatchSize(MID_RUN_BATCH_SIZE);
+    parameters.setNumWorkerThreads(1);
+    Engine engine = new Engine(parameters, createHashParameters()) {
+      @Override
+      String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
+        throw new UnsupportedOperationException("secure hash failed");
+      }
+    };
+
+    engine.run();
+    assertEquals(Set.of(), listFiles(outputDir));
   }
 
   /** Ticket #96. An Error from the secure hash step stops the worker threads, so the JVM can exit. */
@@ -220,7 +250,12 @@ class EngineRunTest {
 
   /** Parameters for one ONE_COLUMN_PER_FIELD run. Writes the extract and a key pair into dir. */
   private static EngineParameters runParameters(Path dir, Path outputDir) throws Exception {
-    Path patientFile = Files.writeString(dir.resolve("patients.csv"), ONE_COLUMN_PER_FIELD);
+    return runParameters(dir, outputDir, ONE_COLUMN_PER_FIELD);
+  }
+
+  /** Parameters for one run of extract. Writes the extract and a key pair into dir. */
+  private static EngineParameters runParameters(Path dir, Path outputDir, String extract) throws Exception {
+    Path patientFile = Files.writeString(dir.resolve("patients.csv"), extract);
     EngineParameters parameters = new EngineParameters();
     parameters.setPatientFile(patientFile.toFile());
     parameters.setOutputDirectory(outputDir);

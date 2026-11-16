@@ -447,7 +447,7 @@ public class Engine {
       } while (waitUntilComplete);
     }
     catch (Exception exc) {
-      executionReport.add("An exception was thrown while writing out the results.  The output file is incomplete and should not be used.");
+      executionReport.add("An exception was thrown while writing out the results.  The incomplete output files were removed.");
       executionReport.add(exc.getMessage());
       exc.printStackTrace();
       return false;
