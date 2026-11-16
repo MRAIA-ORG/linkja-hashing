@@ -219,19 +219,18 @@ public class Engine {
       String fileTimestamp = LocalDateTime.now().format(fileTimestampFormatter);
       Path hashPath = Paths.get(this.parameters.getOutputDirectory().toString(),
               String.format("hashes_%s_%s_%s.enc", hashParameters.getSiteId(), hashParameters.getProjectId(), fileTimestamp));
-      BufferedOutputStream hashStream = new BufferedOutputStream(Files.newOutputStream(hashPath));
-
       Path crosswalkPath = Paths.get(this.parameters.getOutputDirectory().toString(),
               String.format("DONOTSEND_crosswalk_%s_%s_%s.csv", hashParameters.getSiteId(), hashParameters.getProjectId(), fileTimestamp));
-      BufferedWriter crosswalkWriter = Files.newBufferedWriter(crosswalkPath);
-      CSVPrinter crosswalkPrinter = createCrosswalkPrinter(crosswalkWriter);
-
       Path invalidDataPath = Paths.get(this.parameters.getOutputDirectory().toString(),
               String.format("DONOTSEND_invaliddata_%s_%s_%s.csv", hashParameters.getSiteId(), hashParameters.getProjectId(), fileTimestamp));
-      BufferedWriter invalidDataWriter = Files.newBufferedWriter(invalidDataPath);
-      CSVPrinter invalidDataPrinter = createInvalidDataPrinter(invalidDataWriter);
 
-      Path[] allFilePaths = new Path[] { hashPath, crosswalkPath, invalidDataPath };
+      // If the run does not finish, the finally block below closes the files and removes the ones this run made, so a
+      // partial file is never taken for a finished one. A file that was there before the run is kept.
+      List<Path> createdPaths = new ArrayList<>();
+      BufferedOutputStream hashStream = null;
+      BufferedWriter crosswalkWriter = null;
+      BufferedWriter invalidDataWriter = null;
+      boolean finished = false;
 
       // Reset all of our tracking counters right before we begin the processing cycle
       this.numSubmittedJobs = 0;
@@ -242,6 +241,12 @@ public class Engine {
       this.outputRowIndex = 0;
 
       try {
+        hashStream = new BufferedOutputStream(Files.newOutputStream(trackIfNew(hashPath, createdPaths)));
+        crosswalkWriter = Files.newBufferedWriter(trackIfNew(crosswalkPath, createdPaths));
+        CSVPrinter crosswalkPrinter = createCrosswalkPrinter(crosswalkWriter);
+        invalidDataWriter = Files.newBufferedWriter(trackIfNew(invalidDataPath, createdPaths));
+        CSVPrinter invalidDataPrinter = createInvalidDataPrinter(invalidDataWriter);
+
         byte[] sessionKey = Library.generateKey(SESSION_KEY_LENGTH);
         EncryptedHashFileMetadata metadata = initializeHashStream(hashStream, sessionKey, parameters.getEncryptionKeyFile());
 
@@ -255,8 +260,6 @@ public class Engine {
           // probably could, but we're delegating all of that work to our worker steps.
           if (!patientId.equals("")) {
             if (uniquePatientIds.contains(patientId)) {
-              closeWriters(hashStream, crosswalkWriter, invalidDataWriter);
-              deleteOutputFiles(allFilePaths);
               threadPool.shutdownNow();
               throw new LinkjaException(String.format("Patient IDs must be unique within the data file.  A duplicate copy of Patient ID %s was found on row %d.",
                 patientId.trim(), csvRecord.getRecordNumber()));
@@ -289,8 +292,6 @@ public class Engine {
                 // If there was a problem during the middle of the processing cycle, we have to stop work since we can't
                 // rely on our results.
                 threadPool.shutdownNow();
-                closeWriters(hashStream, crosswalkWriter, invalidDataWriter);
-                deleteOutputFiles(allFilePaths);
                 return;
               }
             }
@@ -324,39 +325,45 @@ public class Engine {
           executionReport.add(String.format("     %d original data rows hashed", (totalHashedRows - this.numDerivedRows)));
           executionReport.add(String.format("     %d derived rows hashed", this.numDerivedRows));
           executionReport.add(String.format("  %d invalid rows", this.numInvalidRows));
-        } else {
-          deleteOutputFiles(allFilePaths);
         }
 
         threadPool.shutdown();
+
+        // Ensure at this point (as a final sanity check) that all of our submitted jobs have been tracked to completion
+        if (this.numCompletedJobs != this.numSubmittedJobs) {
+          throw new LinkjaException(String.format("We are missing %d jobs - expected %d, tracked %d to completion.\r\nThe incomplete output files have been removed.",
+                  (this.numSubmittedJobs - this.numCompletedJobs), this.numSubmittedJobs, this.numCompletedJobs));
+        }
+        finished = finalProcessSucceeded;
       } finally {
-
+        if (!finished) {
+          removeUnfinishedOutput(hashStream, crosswalkWriter, invalidDataWriter, createdPaths);
+        }
       }
-
-      // Ensure at this point (as a final sanity check) that all of our submitted jobs have been tracked to completion
-      if (this.numCompletedJobs != this.numSubmittedJobs) {
-        throw new LinkjaException(String.format("We are missing %d jobs - expected %d, tracked %d to completion.\r\nThe unencrypted hash files have been preserved, but are incomplete.",
-                (this.numSubmittedJobs - this.numCompletedJobs), this.numSubmittedJobs, this.numCompletedJobs));
-      }
-
     }
   }
 
-  /**
-   * Delete all output files that were established.  This is a helper method, so it assumes we know the files are there
-   * and can be deleted.
-   * @param paths
-   * @throws IOException
-   */
-  private void deleteOutputFiles(Path[] paths) throws IOException {
-    if (paths == null || paths.length == 0) {
-      return;
+  /** Adds path to createdPaths when no file is there yet, so that only a file this run makes is ever removed. */
+  private static Path trackIfNew(Path path, List<Path> createdPaths) {
+    if (!Files.exists(path)) {
+      createdPaths.add(path);
     }
+    return path;
+  }
 
-    for(Path path : paths) {
-      if (path != null) {
-        Files.delete(path);
-      }
+  /**
+   * Close the output files of a run that did not finish, and remove the ones the run made. A failure to close does not
+   * stop the removal, and does not hide the error that stopped the run.
+   */
+  private void removeUnfinishedOutput(BufferedOutputStream hashStream, BufferedWriter crosswalkWriter,
+                                      BufferedWriter invalidDataWriter, List<Path> createdPaths) throws IOException {
+    try {
+      closeWriters(hashStream, crosswalkWriter, invalidDataWriter);
+    } catch (IOException exc) {
+      executionReport.add("An output file could not be closed: " + exc.getMessage());
+    }
+    for (Path path : createdPaths) {
+      Files.deleteIfExists(path);
     }
   }
 

@@ -6,6 +6,8 @@ import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.lang3.reflect.FieldUtils;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.linkja.core.LinkjaException;
 import org.linkja.hashing.steps.HashingStep;
 import org.linkja.hashing.steps.ValidationFilterStep;
@@ -15,14 +17,18 @@ import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -43,6 +49,12 @@ class EngineRunTest {
 
   // Hash values of ONE_COLUMN_PER_FIELD, made with the engine as it was before the duplicate column check.
   private static final String EXPECTED_HASHES_RESOURCE = "/engine-run/one-column-per-field-hashes.txt";
+
+  private static final String PRIVATE_KEY_FILE = "private.pem";
+
+  // A failed run must keep a file that has the name it would pick. The name has the time to the second, so the test
+  // makes such files for this many seconds from the start of the run.
+  private static final int SAME_NAME_WINDOW_SECONDS = 30;
 
   private static final String ONE_COLUMN_PER_FIELD =
     "patient_id,first_name,last_name,date_of_birth,social_security_number\n" +
@@ -80,6 +92,106 @@ class EngineRunTest {
       "Keep one column for each field and run again.");
   }
 
+  /**
+   * Ticket #96. The secure hash step throws after the output files are open. UnsupportedOperationException is what the
+   * public build of the C library throws. UnsatisfiedLinkError is what a library that cannot link throws. The run must
+   * remove the files it made, and keep a file from an earlier run.
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = { false, true })
+  void run_SecureHashThrows_RemovesFilesItMade(boolean linkError, @TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    Files.writeString(outputDir.resolve("hashes_site1_project1_20200101000000.enc"), "earlier run");
+    Set<Path> before = listFiles(outputDir);
+
+    assertThrows(Throwable.class, failingEngine(dir, outputDir, linkError)::run);
+    assertEquals(before, listFiles(outputDir));
+  }
+
+  /**
+   * Ticket #96. A failed run keeps a file that was in the folder before it, also when the file has the name the run
+   * picks. The name has the time to the second, so the test makes such files for SAME_NAME_WINDOW_SECONDS.
+   */
+  @Test
+  void run_SecureHashThrows_KeepsFileWithSameName(@TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    LocalDateTime now = LocalDateTime.now();
+    for (int second = 0; second < SAME_NAME_WINDOW_SECONDS; second++) {
+      String name = "site1_project1_" + now.plusSeconds(second).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+      Files.writeString(outputDir.resolve("hashes_" + name + ".enc"), "earlier run");
+      Files.writeString(outputDir.resolve("DONOTSEND_crosswalk_" + name + ".csv"), "earlier run");
+      Files.writeString(outputDir.resolve("DONOTSEND_invaliddata_" + name + ".csv"), "earlier run");
+    }
+    Set<Path> before = listFiles(outputDir);
+
+    assertThrows(Throwable.class, failingEngine(dir, outputDir, false)::run);
+    assertEquals(before, listFiles(outputDir));
+  }
+
+  /** An engine whose secure hash step throws UnsatisfiedLinkError (linkError) or UnsupportedOperationException. */
+  private static Engine failingEngine(Path dir, Path outputDir, boolean linkError) throws Exception {
+    return new Engine(runParameters(dir, outputDir), createHashParameters()) {
+      @Override
+      String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
+        if (linkError) {
+          throw new UnsatisfiedLinkError("secure hash failed");
+        }
+        throw new UnsupportedOperationException("secure hash failed");
+      }
+    };
+  }
+
+  /**
+   * Ticket #96. A run that succeeds still writes the three files, and the hash file still holds the hash values of
+   * ONE_COLUMN_PER_FIELD. The secure hash step returns its input (CI has only the public build of the C library), so
+   * the decrypted values are the plain hash values in EXPECTED_HASHES_RESOURCE, without the patient ID column.
+   */
+  @Test
+  void run_Succeeds_SameFilesAndHashesAsBefore(@TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    new Engine(runParameters(dir, outputDir), createHashParameters()) {
+      @Override
+      String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
+        return hash;
+      }
+
+      @Override
+      String revertSecureHash(String secureHash, byte[] sessionKey, String rowId, String tokenId) {
+        return secureHash;
+      }
+    }.run();
+
+    List<String> names = new ArrayList<>();
+    for (Path file : listFiles(outputDir)) {
+      names.add(file.getFileName().toString().replaceAll("_\\d{14}\\.", "_TIMESTAMP."));
+    }
+    names.sort(null);
+    assertEquals(List.of("DONOTSEND_crosswalk_site1_project1_TIMESTAMP.csv",
+      "DONOTSEND_invaliddata_site1_project1_TIMESTAMP.csv", "hashes_site1_project1_TIMESTAMP.enc"), names);
+
+    Set<String> expected = new HashSet<>();
+    for (String line : expectedHashLines()) {
+      expected.add(line.substring(line.indexOf(',') + 1));
+    }
+    assertEquals(expected, new HashSet<>(RunConfigTest.decryptHashFile(outputDir, dir.resolve(PRIVATE_KEY_FILE))));
+  }
+
+  /** Parameters for one ONE_COLUMN_PER_FIELD run. Writes the extract and a key pair into dir. */
+  private static EngineParameters runParameters(Path dir, Path outputDir) throws Exception {
+    Path patientFile = Files.writeString(dir.resolve("patients.csv"), ONE_COLUMN_PER_FIELD);
+    EngineParameters parameters = new EngineParameters();
+    parameters.setPatientFile(patientFile.toFile());
+    parameters.setOutputDirectory(outputDir);
+    parameters.setEncryptionKeyFile(writePublicKey(dir).toFile());
+    return parameters;
+  }
+
+  private static Set<Path> listFiles(Path folder) throws Exception {
+    try (Stream<Path> files = Files.list(folder)) {
+      return files.collect(Collectors.toSet());
+    }
+  }
+
   private static void assertStopsBeforeAnyOutput(Path dir, String extract, String expectedMessage) throws Exception {
     Path patientFile = dir.resolve("patients.csv");
     Files.writeString(patientFile, extract);
@@ -108,15 +220,20 @@ class EngineRunTest {
    */
   @Test
   void hashValues_OneColumnPerField_Unchanged() throws Exception {
-    Set<String> expected = new HashSet<>();
-    try (InputStream stream = getClass().getResourceAsStream(EXPECTED_HASHES_RESOURCE)) {
+    assertEquals(new HashSet<>(expectedHashLines()), new HashSet<>(hashRows(ONE_COLUMN_PER_FIELD)));
+  }
+
+  /** The lines of EXPECTED_HASHES_RESOURCE: patient ID, then the 11 hash values. */
+  private static List<String> expectedHashLines() throws Exception {
+    List<String> lines = new ArrayList<>();
+    try (InputStream stream = EngineRunTest.class.getResourceAsStream(EXPECTED_HASHES_RESOURCE)) {
       for (String line : new String(stream.readAllBytes(), StandardCharsets.UTF_8).split("\n")) {
         if (!line.isBlank()) {
-          expected.add(line);
+          lines.add(line);
         }
       }
     }
-    assertEquals(expected, new HashSet<>(hashRows(ONE_COLUMN_PER_FIELD)));
+    return lines;
   }
 
   @SuppressWarnings("unchecked")
@@ -159,13 +276,18 @@ class EngineRunTest {
     return lines;
   }
 
+  /** Writes a new key pair into dir. Returns the public key file. The private key is in dir/PRIVATE_KEY_FILE. */
   private static Path writePublicKey(Path dir) throws Exception {
     KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
     generator.initialize(2048);
-    byte[] der = generator.generateKeyPair().getPublic().getEncoded();
-    String pem = "-----BEGIN PUBLIC KEY-----\n" + Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(der)
-      + "\n-----END PUBLIC KEY-----\n";
-    return Files.writeString(dir.resolve("public.pem"), pem);
+    KeyPair pair = generator.generateKeyPair();
+    Files.writeString(dir.resolve(PRIVATE_KEY_FILE), pem("PRIVATE KEY", pair.getPrivate().getEncoded()));
+    return Files.writeString(dir.resolve("public.pem"), pem("PUBLIC KEY", pair.getPublic().getEncoded()));
+  }
+
+  private static String pem(String type, byte[] der) {
+    return "-----BEGIN " + type + "-----\n" + Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(der)
+      + "\n-----END " + type + "-----\n";
   }
 
   private static HashParameters createHashParameters() {
