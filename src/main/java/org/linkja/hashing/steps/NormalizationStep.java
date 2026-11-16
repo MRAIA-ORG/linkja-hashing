@@ -14,6 +14,7 @@ public class NormalizationStep implements IStep {
 
   private static ArrayList<String> prefixes = null;
   private static ArrayList<String> suffixes = null;
+  private final DateTimeFormatter dateOfBirthFormatter;
 
   /**
    * Creates an instance of the NormalizationStep
@@ -21,6 +22,17 @@ public class NormalizationStep implements IStep {
    * @param suffixes A list of suffixes used by the normalization step
    */
   public NormalizationStep(ArrayList<String> prefixes, ArrayList<String> suffixes) {
+    this(prefixes, suffixes, ValidationFilterStep.DATE_OF_BIRTH_FORMATTER);
+  }
+
+  /**
+   * Creates an instance of the NormalizationStep
+   * @param prefixes A list of prefixes used by the normalization step
+   * @param suffixes A list of suffixes used by the normalization step
+   * @param dateOfBirthFormatter The parser for birth dates, the same one the validation step uses
+   */
+  public NormalizationStep(ArrayList<String> prefixes, ArrayList<String> suffixes, DateTimeFormatter dateOfBirthFormatter) {
+    this.dateOfBirthFormatter = dateOfBirthFormatter;
     if (this.prefixes == null) {
       this.prefixes = prefixes;
     }
@@ -207,7 +219,7 @@ public class NormalizationStep implements IStep {
    * @return
    */
   public String normalizeDate(String date) {
-    return LocalDate.parse(date, ValidationFilterStep.DATE_OF_BIRTH_FORMATTER).format(NORMALIZED_DATE_OF_BIRTH_FORMAT);
+    return LocalDate.parse(date, dateOfBirthFormatter).format(NORMALIZED_DATE_OF_BIRTH_FORMAT);
   }
 
   @Override

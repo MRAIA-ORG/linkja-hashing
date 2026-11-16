@@ -200,7 +200,7 @@ public class Engine {
 							.setDelimiter(this.parameters.getDelimiter())
 							.get();
 	  CSVParser parser = CSVParser.parse(csvReader, format);
-      this.patientDataHeaderMap.createFromCSVHeader(parser.getHeaderNames()).mergeCanonicalHeaders(this.canonicalHeaderNames);
+      this.patientDataHeaderMap.createFromCSVHeader(parser.getHeaderNames()).mergeCanonicalHeaders(this.canonicalHeaderNames, this.parameters.getColumnMap());
       verifyFields();
 
       // Because our check for unique patient IDs requires knowing every ID that has been seen, and because our processing
@@ -275,7 +275,7 @@ public class Engine {
             batch.trimToSize();  // Free up unused space
             taskQueue.submit(new EngineWorkerThread(batch, this.parameters.isRunNormalizationStep(),
               this.parameters.getRecordExclusionMode(),
-              this.prefixes, this.suffixes, this.genericNames));
+              this.prefixes, this.suffixes, this.genericNames, this.parameters.getDateOfBirthFormatter()));
             batch.clear();  // The worker thread has its copy, so we can clear ours out to start a new batch
             this.numSubmittedJobs++;
 
@@ -302,7 +302,7 @@ public class Engine {
           batch.trimToSize();
           taskQueue.submit(new EngineWorkerThread(batch, this.parameters.isRunNormalizationStep(),
             this.parameters.getRecordExclusionMode(),
-            this.prefixes, this.suffixes, this.genericNames));
+            this.prefixes, this.suffixes, this.genericNames, this.parameters.getDateOfBirthFormatter()));
           this.numSubmittedJobs++;
         }
 
@@ -499,7 +499,7 @@ public class Engine {
       return "";
     }
 
-    return Library.createSecureHash(hash, sessionKey, rowId, tokenId).toUpperCase();
+    return createSecureHash(hash, sessionKey, rowId, tokenId).toUpperCase();
   }
 
   private byte[] getSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
@@ -507,7 +507,19 @@ public class Engine {
       return new byte[64];
     }
 
-    return Library.createSecureHash(hash, sessionKey, rowId, tokenId).toUpperCase().getBytes();
+    return createSecureHash(hash, sessionKey, rowId, tokenId).toUpperCase().getBytes();
+  }
+
+  /**
+   * The two calls below need the secret build of linkja-crypto. They are their own methods so that a test can run
+   * the whole engine with the public build, which is the build CI has.
+   */
+  String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
+    return Library.createSecureHash(hash, sessionKey, rowId, tokenId);
+  }
+
+  String revertSecureHash(String secureHash, byte[] sessionKey, String rowId, String tokenId) {
+    return Library.revertSecureHash(secureHash, sessionKey, rowId, tokenId);
   }
 
   /**
@@ -538,7 +550,7 @@ public class Engine {
         String rowIdString = Long.toString(this.outputRowIndex);
 
         String securePidHash = getSecureHashString(safeGetRowField(row, HashingStep.PIDHASH_FIELD), sessionKey, rowIdString, "1");
-        String auditablePidHash = Library.revertSecureHash(securePidHash, sessionKey, rowIdString, "1").toUpperCase();
+        String auditablePidHash = revertSecureHash(securePidHash, sessionKey, rowIdString, "1").toUpperCase();
         crosswalkPrinter.printRecord(row.get(Engine.PATIENT_ID_FIELD), auditablePidHash);
 
         hashStream.write(securePidHash.getBytes());

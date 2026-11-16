@@ -3,6 +3,7 @@ package org.linkja.hashing.steps;
 import org.junit.jupiter.api.Test;
 import org.linkja.hashing.DataRow;
 import org.linkja.hashing.Engine;
+import org.linkja.hashing.EngineParameters;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -300,6 +301,29 @@ class ValidationFilterStepTest {
     assert(step.isValidDateFormat("2019 3 2"));    // yyyy M d
     assert(step.isValidDateFormat("20190302"));    // yyyyMMdd
     assert(step.isValidDateFormat("02/29/2016"));      // Valid leap year
+  }
+
+  @Test
+  void isValidDateFormat_DefaultFormatsReadAsToday() {
+    ValidationFilterStep step = new ValidationFilterStep(ValidationFilterStep.DATE_OF_BIRTH_FORMATTER);
+    assert(step.isValidDateFormat("2001/2/3"));    // uuuu/M/d
+    assert(step.isValidDateFormat("2001-2-3"));    // uuuu-M-d
+    assert(step.isValidDateFormat("2001 2 3"));    // uuuu M d
+    assert(step.isValidDateFormat("20010203"));    // uuuuMMdd
+    assert(step.isValidDateFormat("2/3/2001"));    // M/d/uuuu
+    assert(step.isValidDateFormat("2-3-2001"));    // M-d-uuuu
+    assert(step.isValidDateFormat("2 3 2001"));    // M d uuuu
+    // MMdduuuu is in the default pattern, but the uuuuMMdd section reads these 8 digits first, so today it fails.
+    // This test keeps today's behavior. Fixing it changes which rows hash, so it is its own ticket.
+    assertFalse(step.isValidDateFormat("02032001"));
+  }
+
+  @Test
+  void isValidDateFormat_SetFormatAcceptsOnlyThatFormat() {
+    ValidationFilterStep step = new ValidationFilterStep(EngineParameters.dateOfBirthFormatter("uuuu/MM/dd"));
+    assert(step.isValidDateFormat("2001/02/03"));
+    assertFalse(step.isValidDateFormat("02/03/2001"));
+    assertFalse(step.isValidDateFormat("2001/02/30"));  // The strict resolver still applies
   }
 
   @Test

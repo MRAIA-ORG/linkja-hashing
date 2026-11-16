@@ -5,12 +5,24 @@ import org.linkja.core.*;
 import org.apache.commons.cli.*;
 
 import java.io.*;
+import java.nio.charset.CharacterCodingException;
 import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
+import java.util.TreeMap;
 
 // TODO: Write unit tests for helper methods (everything but main)
 public class Runner {
+  private static final String COLUMN_KEY_PREFIX = "column.";
+  // The run config keys other than "column.<field>". DataHeaderMap checks the field of each column key.
+  private static final Set<String> RUN_CONFIG_KEYS = Set.of("site.salt_file", "aggregator.public_key",
+    "site.private_date", "input.file", "input.delimiter", "input.date_format", "output.directory");
+
   public static void main(String[] args) {
     Options options = setUpCommandLine();
     CommandLine cmd = parseCommandLine(options, args);
@@ -28,30 +40,10 @@ public class Runner {
 
     long startTime = System.nanoTime();
 
-    // Our parameters come from the command line and from a local config.properties file.  We split these up under the
-    // assumption that those most likely to change across run should be passed in the command line, and those most
-    // likely to remain consistent across runs should be in a config.properties file.
-    EngineParameters parameters = new EngineParameters();
+    // Our parameters come from the command line, the run config (--config) and a local config.properties file.
+    EngineParameters parameters = null;
     try {
-      // Get the additional parameters that may be set
-      parameters.setSaltFile(cmd.getOptionValue("saltFile"));
-      parameters.setPatientFile(cmd.getOptionValue("patientFile"));
-      parameters.setPrivateDate(cmd.getOptionValue("privateDate"));
-      parameters.setEncryptionKeyFile(cmd.getOptionValue("encryptionKey"));
-      parameters.setDelimiter(cmd.getOptionValue("delimiter", new String(new char[] { EngineParameters.DEFAULT_DELIMITER })));
-      parameters.setRecordExclusionMode(parseRecordExclusionMode(cmd.getOptionValue("exclusionMode")));
-      parameters = loadConfig(parameters);
-      String outputDirectory = cmd.getOptionValue("outDirectory");
-      if (outputDirectory == null || outputDirectory.equals("")) {
-        Path path = FileSystems.getDefault().getPath("").toAbsolutePath();
-        outputDirectory = path.toString();
-        System.out.printf("Results will be written to %s\r\n", outputDirectory);
-      }
-      parameters.setOutputDirectory(outputDirectory);
-
-      if (!parameters.hashingModeOptionsSet()) {
-        throw new LinkjaException("Not all of the required parameters were provided");
-      }
+      parameters = buildParameters(cmd);
     }
     catch (Exception exc) {
       displayUsage();
@@ -90,6 +82,120 @@ public class Runner {
 
     double elapsedSeconds = (double)(endTime - startTime) / 1_000_000_000.0;
     System.out.printf("Total execution time: %2f sec\n", elapsedSeconds);
+  }
+
+  /**
+   * Collect the settings of a hashing run from the command line, the run config (--config) and config.properties.
+   * A command-line flag wins over the same key in the run config.
+   * @param cmd The parsed command line
+   * @return The settings for the engine
+   * @throws Exception When a required setting is missing or invalid. No output file exists yet at this point.
+   */
+  public static EngineParameters buildParameters(CommandLine cmd) throws Exception {
+    Properties runConfig = cmd.hasOption("config") ? loadRunConfig(cmd.getOptionValue("config")) : null;
+    EngineParameters parameters = new EngineParameters();
+    parameters.setSaltFile(requiredSetting(cmd, runConfig, "saltFile", "site.salt_file"));
+    parameters.setPatientFile(requiredSetting(cmd, runConfig, "patientFile", "input.file"));
+    parameters.setPrivateDate(requiredSetting(cmd, runConfig, "privateDate", "site.private_date"));
+    parameters.setEncryptionKeyFile(requiredSetting(cmd, runConfig, "encryptionKey", "aggregator.public_key"));
+    parameters.setDelimiter(setting(cmd, runConfig, "delimiter", "input.delimiter",
+      new String(new char[] { EngineParameters.DEFAULT_DELIMITER })));  // A blank value stops the run, as on develop
+    parameters.setRecordExclusionMode(parseRecordExclusionMode(cmd.getOptionValue("exclusionMode")));
+    parameters = loadConfig(parameters);
+    String outputDirectory = setting(cmd, runConfig, "outDirectory", "output.directory", null);
+    if (outputDirectory == null || outputDirectory.trim().isEmpty()) {
+      Path path = FileSystems.getDefault().getPath("").toAbsolutePath();
+      outputDirectory = path.toString();
+      System.out.printf("Results will be written to %s\r\n", outputDirectory);
+    }
+    parameters.setOutputDirectory(outputDirectory.trim());
+
+    if (runConfig != null) {
+      parameters.setDateFormat(runConfig.getProperty("input.date_format"));
+      parameters.setColumnMap(columnMap(runConfig));
+    }
+
+    if (!parameters.hashingModeOptionsSet()) {
+      throw new LinkjaException("Not all of the required parameters were provided");
+    }
+    return parameters;
+  }
+
+  /**
+   * Read the run config, a Java Properties (key=value) file in UTF-8. A byte order mark at the start is dropped.
+   * @throws LinkjaException When the file is not found or not UTF-8, or a key is not a run config key, e.g. a typo
+   *                         such as input.date_fromat
+   */
+  public static Properties loadRunConfig(String path) throws IOException, LinkjaException {
+    String text;
+    try {
+      text = Files.readString(Paths.get(path));
+    }
+    catch (NoSuchFileException exc) {
+      throw new LinkjaException(String.format("The run config file %s was not found.", path));
+    }
+    catch (CharacterCodingException exc) {
+      throw new LinkjaException(String.format("The run config file %s is not UTF-8. Save it as UTF-8 and run again.", path));
+    }
+    Properties runConfig = new Properties();
+    runConfig.load(new StringReader(text.startsWith("\uFEFF") ? text.substring(1) : text));
+    for (String key : runConfig.stringPropertyNames()) {
+      if (!key.startsWith(COLUMN_KEY_PREFIX) && !RUN_CONFIG_KEYS.contains(key)) {
+        throw new LinkjaException(unknownKeyMessage(text, key));
+      }
+    }
+    return runConfig;
+  }
+
+  /**
+   * The message for an unknown key. A line with no separator is read as one long key, and that line can hold a
+   * value such as the private date. So the key is named only when its line also has a value after it and the key
+   * looks like a key name, e.g. not the first part of a data row from a wrong file.
+   */
+  private static String unknownKeyMessage(String text, String key) {
+    String[] lines = text.split("\\R");
+    for (int index = 0; index < lines.length; index++) {
+      String line = lines[index].strip();
+      if (line.startsWith(key)) {
+        String named = (line.length() > key.length() && key.matches("[A-Za-z0-9_.]+")) ? key + " on " : "";
+        return String.format("The run config key %sline %d is not a known key. Check its spelling in the README.",
+          named, index + 1);
+      }
+    }
+    return "The run config has a key that is not a known key. Check the spelling of each key in the README.";
+  }
+
+  /**
+   * The value of one setting, as given: the command-line flag if given, else the run config key, else the fallback.
+   */
+  private static String setting(CommandLine cmd, Properties runConfig, String flag, String key, String fallback) {
+    String value = cmd.getOptionValue(flag);
+    if (value == null && runConfig != null) {
+      value = runConfig.getProperty(key);
+    }
+    return (value == null) ? fallback : value;
+  }
+
+  /** A required setting, trimmed. A blank value counts as missing. */
+  private static String requiredSetting(CommandLine cmd, Properties runConfig, String flag, String key) throws LinkjaException {
+    String value = setting(cmd, runConfig, flag, key, null);
+    if (value == null || value.trim().isEmpty()) {
+      throw new LinkjaException(String.format("The required setting %s is missing. Set it in the run config, or give --%s.", key, flag));
+    }
+    return value.trim();
+  }
+
+  /**
+   * The column keys of the run config: field name (the part after "column.") to input extract header.
+   */
+  private static Map<String, String> columnMap(Properties runConfig) {
+    Map<String, String> columns = new TreeMap<String, String>();
+    for (String key : runConfig.stringPropertyNames()) {
+      if (key.startsWith(COLUMN_KEY_PREFIX)) {
+        columns.put(key.substring(COLUMN_KEY_PREFIX.length()), runConfig.getProperty(key).trim());
+      }
+    }
+    return columns;
   }
 
   public static HashParameters parseProjectSalt(File saltFile, int minSaltLength) throws Exception {
@@ -200,6 +306,10 @@ public class Runner {
     outputDirectoryOpt.setRequired(false);
     options.addOption(outputDirectoryOpt);
 
+    Option configOpt = new Option("config", "config", true, "path to the run config file (key=value)");
+    configOpt.setRequired(false);
+    options.addOption(configOpt);
+
     Option delimiterOpt = new Option("delim", "delimiter", true, "the delimiter used within the patient data file");
     delimiterOpt.setRequired(false);
     options.addOption(delimiterOpt);
@@ -234,7 +344,7 @@ public class Runner {
    */
   public static void displayUsage() {
     System.out.println();
-    System.out.println("Usage: java -jar Hashing.jar [--version]");
+    System.out.println("Usage: java -jar Hashing.jar [--version] [--config <run config file>]");
     System.out.println();
     System.out.println("HASHING (Default Mode)");
     System.out.println("-------------");
@@ -245,7 +355,11 @@ public class Runner {
     System.out.println("  -patient,--patientFile <arg>      Path to the file containing patient data");
     System.out.println("  -salt,--saltFile <arg>            Path to salt file");
     System.out.println();
+    System.out.println("Each required parameter can instead come from the run config (--config).");
+    System.out.println("A parameter on the command line wins over the same key in the run config.");
+    System.out.println();
     System.out.println("Optional parameters:");
+    System.out.println("  -config,--config <arg>            Path to the run config file. See the README.");
     System.out.println("  -out,--outDirectory <arg>         The base directory to create output. If not");
     System.out.println("                                    specified, will use the current directory.");
     System.out.println("  -delim,--delimiter <arg>          The delimiter used within the patient data");

@@ -1,13 +1,18 @@
 package org.linkja.hashing;
 
 import org.linkja.core.*;
+import org.linkja.hashing.steps.ValidationFilterStep;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.nio.file.Path;
 import java.security.InvalidParameterException;
 import java.text.ParseException;
+import java.time.DateTimeException;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.ResolverStyle;
+import java.util.Map;
 
 /**
  * This represents a consolidated collection of parameters needed to run the engine.
@@ -42,6 +47,10 @@ public class EngineParameters {
   private boolean runNormalizationStep = DEFAULT_RUN_NORMALIZATION_STEP;
   private FileHelper fileHelper;
   private int minSaltLength = DEFAULT_MIN_SALT_LENGTH;
+  private DateTimeFormatter dateOfBirthFormatter = ValidationFilterStep.DATE_OF_BIRTH_FORMATTER;
+  // Field name (as written after "column." in the run config) to input extract header. Null when the run has no
+  // run config. A run config with no column keys gives an empty map.
+  private Map<String, String> columnMap = null;
 
   public EngineParameters() {
     fileHelper = new FileHelper();
@@ -245,5 +254,60 @@ public class EngineParameters {
 
   public void setMinSaltLength(String minSaltLength) {
     setMinSaltLength((minSaltLength == null) ? -1 : Integer.parseInt(minSaltLength.trim()));
+  }
+
+  /**
+   * Make the birth date parser for one Java date pattern. The pattern needs 'uuuu' for the year, because the parser
+   * uses the strict resolver, as the default parser does.
+   */
+  public static DateTimeFormatter dateOfBirthFormatter(String pattern) {
+    return DateTimeFormatter.ofPattern(pattern).withResolverStyle(ResolverStyle.STRICT);
+  }
+
+  public DateTimeFormatter getDateOfBirthFormatter() {
+    return dateOfBirthFormatter;
+  }
+
+  /**
+   * @param pattern The input.date_format value. When it is null or empty, the default birth date formats apply.
+   * @throws LinkjaException When the pattern cannot read back a full date before 2000 unchanged, e.g. "yyyy/MM/dd",
+   *                         which the strict resolver rejects, or "dd/MM/uu", which reads 1950 as 2050
+   */
+  public void setDateFormat(String pattern) throws LinkjaException {
+    if (pattern == null || pattern.trim().isEmpty()) {
+      this.dateOfBirthFormatter = ValidationFilterStep.DATE_OF_BIRTH_FORMATTER;
+      return;
+    }
+    String trimmed = pattern.trim();
+    // A date before 2000 shows a two-digit year. Midnight lets a pattern with a time of day format the sample.
+    LocalDateTime sample = LocalDateTime.of(1950, 2, 3, 0, 0);
+    String reason;
+    try {
+      DateTimeFormatter formatter = dateOfBirthFormatter(trimmed);
+      LocalDate readBack = LocalDate.parse(sample.format(formatter), formatter);
+      if (readBack.equals(sample.toLocalDate())) {
+        this.dateOfBirthFormatter = formatter;
+        return;
+      }
+      reason = (readBack.getYear() != sample.getYear()) ? "It has a two-digit year."
+        : "It cannot read the full date back.";
+    }
+    catch (DateTimeException | IllegalArgumentException exc) {
+      String fields = trimmed.replaceAll("'[^']*'", "");  // Drop quoted text, e.g. 'T'
+      reason = fields.contains("y") ? "It has y for the year, and the date parser is strict."
+        : !fields.contains("d") ? "It has no day."
+        : "It cannot read the full date back.";
+    }
+    throw new LinkjaException(String.format(
+      "The input.date_format \"%s\" cannot be used. %s Use uuuu for the year, MM for the month and dd for the day, e.g. uuuu/MM/dd.",
+      trimmed, reason));
+  }
+
+  public Map<String, String> getColumnMap() {
+    return columnMap;
+  }
+
+  public void setColumnMap(Map<String, String> columnMap) {
+    this.columnMap = columnMap;
   }
 }

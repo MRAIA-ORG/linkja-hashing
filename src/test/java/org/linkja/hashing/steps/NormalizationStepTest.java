@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.linkja.hashing.DataRow;
 import org.linkja.hashing.Engine;
+import org.linkja.hashing.EngineParameters;
 
 import java.util.ArrayList;
 
@@ -284,6 +285,12 @@ class NormalizationStepTest {
     NormalizationStep step = new NormalizationStep(null, null);
     assertEquals("2019-01-01", step.normalizeDate("01/01/2019 13:30"));
     assertEquals("2019-12-31", step.normalizeDate("2019-12-31"));
+  }
+
+  @Test
+  void normalizeDate_SetFormat() {
+    NormalizationStep step = new NormalizationStep(null, null, EngineParameters.dateOfBirthFormatter("uuuu/MM/dd"));
+    assertEquals("2001-02-03", step.normalizeDate("2001/02/03"));
   }
 
   @Test
