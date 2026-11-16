@@ -9,6 +9,7 @@ import java.security.InvalidParameterException;
 import java.text.ParseException;
 import java.time.DateTimeException;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.ResolverStyle;
 import java.util.Map;
@@ -269,25 +270,37 @@ public class EngineParameters {
 
   /**
    * @param pattern The input.date_format value. When it is null or empty, the default birth date formats apply.
-   * @throws LinkjaException When the pattern cannot read back a full date, e.g. "yyyy/MM/dd", which the strict
-   *                         resolver rejects for every date
+   * @throws LinkjaException When the pattern cannot read back a full date before 2000 unchanged, e.g. "yyyy/MM/dd",
+   *                         which the strict resolver rejects, or "dd/MM/uu", which reads 1950 as 2050
    */
   public void setDateFormat(String pattern) throws LinkjaException {
     if (pattern == null || pattern.trim().isEmpty()) {
       this.dateOfBirthFormatter = ValidationFilterStep.DATE_OF_BIRTH_FORMATTER;
       return;
     }
+    String trimmed = pattern.trim();
+    // A date before 2000 shows a two-digit year. Midnight lets a pattern with a time of day format the sample.
+    LocalDateTime sample = LocalDateTime.of(1950, 2, 3, 0, 0);
+    String reason;
     try {
-      DateTimeFormatter formatter = dateOfBirthFormatter(pattern.trim());
-      LocalDate sample = LocalDate.of(2001, 2, 3);
-      LocalDate.parse(sample.format(formatter), formatter);
-      this.dateOfBirthFormatter = formatter;
+      DateTimeFormatter formatter = dateOfBirthFormatter(trimmed);
+      LocalDate readBack = LocalDate.parse(sample.format(formatter), formatter);
+      if (readBack.equals(sample.toLocalDate())) {
+        this.dateOfBirthFormatter = formatter;
+        return;
+      }
+      reason = (readBack.getYear() != sample.getYear()) ? "It has a two-digit year."
+        : "It cannot read the full date back.";
     }
     catch (DateTimeException | IllegalArgumentException exc) {
-      throw new LinkjaException(String.format(
-        "The input.date_format \"%s\" cannot read a full date. Use uuuu for the year, MM for the month and dd for the day, e.g. uuuu/MM/dd.",
-        pattern.trim()));
+      String fields = trimmed.replaceAll("'[^']*'", "");  // Drop quoted text, e.g. 'T'
+      reason = fields.contains("y") ? "It has y for the year, and the date parser is strict."
+        : !fields.contains("d") ? "It has no day."
+        : "It cannot read the full date back.";
     }
+    throw new LinkjaException(String.format(
+      "The input.date_format \"%s\" cannot be used. %s Use uuuu for the year, MM for the month and dd for the day, e.g. uuuu/MM/dd.",
+      trimmed, reason));
   }
 
   public Map<String, String> getColumnMap() {

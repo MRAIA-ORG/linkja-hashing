@@ -5,8 +5,10 @@ import org.linkja.core.*;
 import org.apache.commons.cli.*;
 
 import java.io.*;
+import java.nio.charset.CharacterCodingException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
@@ -121,18 +123,46 @@ public class Runner {
 
   /**
    * Read the run config, a Java Properties (key=value) file in UTF-8. A byte order mark at the start is dropped.
-   * @throws LinkjaException When a key is not a run config key, e.g. a typo such as input.date_fromat
+   * @throws LinkjaException When the file is not found or not UTF-8, or a key is not a run config key, e.g. a typo
+   *                         such as input.date_fromat
    */
   public static Properties loadRunConfig(String path) throws IOException, LinkjaException {
-    String text = Files.readString(Paths.get(path));
+    String text;
+    try {
+      text = Files.readString(Paths.get(path));
+    }
+    catch (NoSuchFileException exc) {
+      throw new LinkjaException(String.format("The run config file %s was not found.", path));
+    }
+    catch (CharacterCodingException exc) {
+      throw new LinkjaException(String.format("The run config file %s is not UTF-8. Save it as UTF-8 and run again.", path));
+    }
     Properties runConfig = new Properties();
     runConfig.load(new StringReader(text.startsWith("\uFEFF") ? text.substring(1) : text));
     for (String key : runConfig.stringPropertyNames()) {
       if (!key.startsWith(COLUMN_KEY_PREFIX) && !RUN_CONFIG_KEYS.contains(key)) {
-        throw new LinkjaException(String.format("The run config key %s is not a known key. Check its spelling in the README.", key));
+        throw new LinkjaException(unknownKeyMessage(text, key));
       }
     }
     return runConfig;
+  }
+
+  /**
+   * The message for an unknown key. A line with no separator is read as one long key, and that line can hold a
+   * value such as the private date. So the key is named only when its line also has a value after it and the key
+   * looks like a key name, e.g. not the first part of a data row from a wrong file.
+   */
+  private static String unknownKeyMessage(String text, String key) {
+    String[] lines = text.split("\\R");
+    for (int index = 0; index < lines.length; index++) {
+      String line = lines[index].strip();
+      if (line.startsWith(key)) {
+        String named = (line.length() > key.length() && key.matches("[A-Za-z0-9_.]+")) ? key + " on " : "";
+        return String.format("The run config key %sline %d is not a known key. Check its spelling in the README.",
+          named, index + 1);
+      }
+    }
+    return "The run config has a key that is not a known key. Check the spelling of each key in the README.";
   }
 
   /**

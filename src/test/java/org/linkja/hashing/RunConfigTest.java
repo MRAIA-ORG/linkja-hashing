@@ -256,6 +256,110 @@ class RunConfigTest {
   }
 
   @Test
+  void dateFormat_TwoDigitYear_StopsAndSaysUseUuuu() throws Exception {
+    Path out = newDir();
+    List<String> lines = requiredKeys(write("standard.csv", STANDARD_EXTRACT), out);
+    lines.add("input.date_format=dd/MM/uu");
+    String config = writeConfig(lines).toString();
+    Exception exc = assertThrows(LinkjaException.class, () -> hash("--config", config));
+    assertTrue(exc.getMessage().contains("two-digit year"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("uuuu"), exc.getMessage());
+    assertNoOutput(out);
+  }
+
+  @Test
+  void dateFormat_NoDay_StopsAndSaysNoDay() throws Exception {
+    List<String> lines = requiredKeys(write("standard.csv", STANDARD_EXTRACT), newDir());
+    lines.add("input.date_format=uuuu/MM");
+    String config = writeConfig(lines).toString();
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters("--config", config));
+    assertTrue(exc.getMessage().contains("no day"), exc.getMessage());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = { "dd/MM/uuuu HH:mm", "uuuu-MM-dd'T'HH:mm", "uuuu-MM-dd HH:mm:ss" })
+  void dateFormat_WithTimeOfDay_Accepted(String pattern) throws Exception {
+    List<String> lines = requiredKeys(write("standard.csv", STANDARD_EXTRACT), newDir());
+    lines.add("input.date_format=" + pattern);
+    assertNotNull(parameters("--config", writeConfig(lines).toString()).getDateOfBirthFormatter());
+  }
+
+  @Test
+  void dateFormat_WithTimeOfDay_HashesAsIsoDateByFlags() throws Exception {
+    Path extract = write("with-time.csv", String.join("\n",
+      "patient_id,first_name,last_name,dob,ssn",
+      "P1,Alice,Smith,03/02/2001 00:00,123-45-6780") + "\n");
+    Path iso = write("iso.csv", String.join("\n",
+      "patient_id,first_name,last_name,dob,ssn",
+      "P1,Alice,Smith,2001-02-03,123-45-6780") + "\n");
+    List<String> lines = requiredKeys(extract, newDir());
+    lines.add("input.date_format=dd/MM/uuuu HH:mm");
+    List<String> byConfig = hash("--config", writeConfig(lines).toString());
+    assertEquals(1, byConfig.size());
+    assertEquals(hash(flagArgs(iso, newDir())), byConfig);
+  }
+
+  @Test
+  void columnKey_FieldNameCaseIgnored() throws Exception {
+    Path extract = write("renamed.csv", String.join("\n",
+      "patient_id,GIVEN,last_name,dob,ssn",
+      "P1,Alice,Smith,02/03/2001,123-45-6780",
+      "P2,Bobby,Jones,11/30/1975,",
+      "P3,Carol,Brown,07/04/1960,987-65-4320") + "\n");
+    List<String> lines = requiredKeys(extract, newDir());
+    lines.add("column.FIRST_NAME=GIVEN");
+    List<String> byConfig = hash("--config", writeConfig(lines).toString());
+    assertEquals(hash(flagArgs(write("standard.csv", STANDARD_EXTRACT), newDir())), byConfig);
+  }
+
+  @Test
+  void blankRequiredKey_StopsAndNamesKey() throws Exception {
+    List<String> lines = requiredKeys(write("standard.csv", STANDARD_EXTRACT), newDir());
+    lines.removeIf(line -> line.startsWith("site.salt_file="));
+    lines.add("site.salt_file=");
+    String config = writeConfig(lines).toString();
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters("--config", config));
+    assertTrue(exc.getMessage().contains("site.salt_file"), exc.getMessage());
+  }
+
+  @Test
+  void lineWithNoSeparator_StopsWithoutPrintingTheLine() throws Exception {
+    List<String> lines = requiredKeys(write("standard.csv", STANDARD_EXTRACT), newDir());
+    lines.removeIf(line -> line.startsWith("site.private_date="));
+    lines.add("site.private_date" + PRIVATE_DATE);
+    String config = writeConfig(lines).toString();
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters("--config", config));
+    assertFalse(exc.getMessage().contains(PRIVATE_DATE), exc.getMessage());
+    assertTrue(exc.getMessage().contains("line " + lines.size()), exc.getMessage());
+  }
+
+  @Test
+  void dataRowAsConfig_StopsWithoutPrintingTheRow() throws Exception {
+    Path config = write("wrong-file.csv", "P1,Alice Smith," + PRIVATE_DATE + "\n");
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters("--config", config.toString()));
+    assertFalse(exc.getMessage().contains("Alice"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("line 1"), exc.getMessage());
+  }
+
+  @Test
+  void runConfigNotUtf8_StopsAndSaysUtf8() throws Exception {
+    Path extract = write("standard.csv", STANDARD_EXTRACT);
+    Path config = Files.createTempFile(dir, "latin1", ".properties");
+    Files.write(config, (String.join("\n", requiredKeys(extract, newDir())) + "\n# caf\u00e9\n")
+      .getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters("--config", config.toString()));
+    assertTrue(exc.getMessage().contains("UTF-8"), exc.getMessage());
+  }
+
+  @Test
+  void runConfigMissing_StopsAndSaysNotFound() throws Exception {
+    String missing = dir.resolve("no-such-run.properties").toString();
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters("--config", missing));
+    assertTrue(exc.getMessage().contains("not found"), exc.getMessage());
+    assertTrue(exc.getMessage().contains(missing), exc.getMessage());
+  }
+
+  @Test
   void withConfig_IdAndPatientId_ColumnKeyPicksOne_Hashes() throws Exception {
     // The column map is applied before the one-column-per-field check, so naming PATIENT_ID drops ID.
     Path extract = write("id-and-patient-id.csv", String.join("\n",
