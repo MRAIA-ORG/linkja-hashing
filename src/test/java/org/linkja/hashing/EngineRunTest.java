@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -55,6 +56,7 @@ class EngineRunTest {
   // A failed run must keep a file that has the name it would pick. The name has the time to the second, so the test
   // makes such files for this many seconds from the start of the run.
   private static final int SAME_NAME_WINDOW_SECONDS = 30;
+  private static final String EARLIER_RUN = "earlier run";
 
   private static final String ONE_COLUMN_PER_FIELD =
     "patient_id,first_name,last_name,date_of_birth,social_security_number\n" +
@@ -109,8 +111,9 @@ class EngineRunTest {
   }
 
   /**
-   * Ticket #96. A failed run keeps a file that was in the folder before it, also when the file has the name the run
-   * picks. The name has the time to the second, so the test makes such files for SAME_NAME_WINDOW_SECONDS.
+   * Ticket #96. A run never opens a file that is already there, so a file from an earlier run with the name this run
+   * picks is not changed. The run stops with a message that names the file. The name has the time to the second, so
+   * the test makes such files for SAME_NAME_WINDOW_SECONDS.
    */
   @Test
   void run_SecureHashThrows_KeepsFileWithSameName(@TempDir Path dir) throws Exception {
@@ -118,14 +121,53 @@ class EngineRunTest {
     LocalDateTime now = LocalDateTime.now();
     for (int second = 0; second < SAME_NAME_WINDOW_SECONDS; second++) {
       String name = "site1_project1_" + now.plusSeconds(second).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
-      Files.writeString(outputDir.resolve("hashes_" + name + ".enc"), "earlier run");
-      Files.writeString(outputDir.resolve("DONOTSEND_crosswalk_" + name + ".csv"), "earlier run");
-      Files.writeString(outputDir.resolve("DONOTSEND_invaliddata_" + name + ".csv"), "earlier run");
+      Files.writeString(outputDir.resolve("hashes_" + name + ".enc"), EARLIER_RUN);
+      Files.writeString(outputDir.resolve("DONOTSEND_crosswalk_" + name + ".csv"), EARLIER_RUN);
+      Files.writeString(outputDir.resolve("DONOTSEND_invaliddata_" + name + ".csv"), EARLIER_RUN);
     }
     Set<Path> before = listFiles(outputDir);
 
-    assertThrows(Throwable.class, failingEngine(dir, outputDir, false)::run);
+    LinkjaException exc = assertThrows(LinkjaException.class, failingEngine(dir, outputDir, false)::run);
+    assertTrue(exc.getMessage().matches("The output file .*" + outputDir.getFileName() + ".*_\\d{14}\\.\\w+ is already there\\. "
+      + "Move it out of the output folder, and run again\\."), exc.getMessage());
     assertEquals(before, listFiles(outputDir));
+    for (Path file : before) {
+      assertEquals(EARLIER_RUN, Files.readString(file), file.toString());
+    }
+  }
+
+  /** Ticket #96. An Error from the secure hash step stops the worker threads, so the JVM can exit. */
+  @Test
+  void run_SecureHashThrowsError_ShutsDownThreadPool(@TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    List<ExecutorService> pools = new ArrayList<>();
+    Engine engine = new Engine(runParameters(dir, outputDir), createHashParameters()) {
+      @Override
+      String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
+        throw new UnsatisfiedLinkError("secure hash failed");
+      }
+
+      @Override
+      ExecutorService createThreadPool(int numThreads) {
+        ExecutorService pool = super.createThreadPool(numThreads);
+        pools.add(pool);
+        return pool;
+      }
+    };
+
+    assertThrows(UnsatisfiedLinkError.class, engine::run);
+    assertEquals(1, pools.size());
+    assertTrue(pools.get(0).isShutdown());
+  }
+
+  /** Ticket #96. A run that stops on a repeated patient ID leaves no output file. */
+  @Test
+  void run_DuplicatePatientId_LeavesNoOutputFiles(@TempDir Path dir) throws Exception {
+    assertStopsBeforeAnyOutput(dir,
+      "patient_id,first_name,last_name,date_of_birth\n" +
+      "P001,Alice,Example,1980-01-15\n" +
+      "P001,Robert,Sample,1975-12-02\n",
+      "Patient IDs must be unique within the data file.  A duplicate copy of Patient ID P001 was found on row 2.");
   }
 
   /** An engine whose secure hash step throws UnsatisfiedLinkError (linkError) or UnsupportedOperationException. */

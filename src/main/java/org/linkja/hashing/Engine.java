@@ -16,9 +16,12 @@ import org.linkja.core.*;
 import java.io.*;
 import java.net.URISyntaxException;
 import java.nio.charset.Charset;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -34,6 +37,9 @@ public class Engine {
   public static final int SESSION_KEY_LENGTH = 32;
 
   private static final String EMPTY_HASH = "";
+
+  // Open options of the output files: a run fails, and does not change the file, when a file of that name is there.
+  private static final OpenOption[] NEW_FILE = { StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE };
 
   // List the canonical names for anticipated fields
   public static final String PATIENT_ID_FIELD = "patient_id";
@@ -210,8 +216,7 @@ public class Engine {
 
       // Build our thread pool and task queue - these are configured with a set number of threads (that the user can define),
       // and will run such that that number of threads is the total amount of work we have queued up.
-      ExecutorService threadPool = new ThreadPoolExecutor(parameters.getNumWorkerThreads(), parameters.getNumWorkerThreads(),30,TimeUnit.MINUTES,
-              new ArrayBlockingQueue<Runnable>(parameters.getNumWorkerThreads()), new ThreadPoolExecutor.CallerRunsPolicy());
+      ExecutorService threadPool = createThreadPool(parameters.getNumWorkerThreads());
       ExecutorCompletionService<List<DataRow>> taskQueue = new ExecutorCompletionService<List<DataRow>>(threadPool);
 
       // Open up our output streams for hash results, crosswalks and invalid results.  We may have an optional 4th file
@@ -224,13 +229,15 @@ public class Engine {
       Path invalidDataPath = Paths.get(this.parameters.getOutputDirectory().toString(),
               String.format("DONOTSEND_invaliddata_%s_%s_%s.csv", hashParameters.getSiteId(), hashParameters.getProjectId(), fileTimestamp));
 
-      // If the run does not finish, the finally block below closes the files and removes the ones this run made, so a
-      // partial file is never taken for a finished one. A file that was there before the run is kept.
+      // Each output file is opened only if it is not there yet, so every file in createdPaths is this run's own. If the
+      // run does not finish, the finally block below stops the workers, closes the files and removes those files, so a
+      // partial file is never taken for a finished one.
       List<Path> createdPaths = new ArrayList<>();
       BufferedOutputStream hashStream = null;
       BufferedWriter crosswalkWriter = null;
       BufferedWriter invalidDataWriter = null;
       boolean finished = false;
+      Throwable failure = null;
 
       // Reset all of our tracking counters right before we begin the processing cycle
       this.numSubmittedJobs = 0;
@@ -241,10 +248,17 @@ public class Engine {
       this.outputRowIndex = 0;
 
       try {
-        hashStream = new BufferedOutputStream(Files.newOutputStream(trackIfNew(hashPath, createdPaths)));
-        crosswalkWriter = Files.newBufferedWriter(trackIfNew(crosswalkPath, createdPaths));
+        try {
+          hashStream = new BufferedOutputStream(Files.newOutputStream(hashPath, NEW_FILE));
+          createdPaths.add(hashPath);
+          crosswalkWriter = Files.newBufferedWriter(crosswalkPath, NEW_FILE);
+          createdPaths.add(crosswalkPath);
+          invalidDataWriter = Files.newBufferedWriter(invalidDataPath, NEW_FILE);
+          createdPaths.add(invalidDataPath);
+        } catch (FileAlreadyExistsException exc) {
+          throw new LinkjaException(String.format("The output file %s is already there. Move it out of the output folder, and run again.", exc.getFile()));
+        }
         CSVPrinter crosswalkPrinter = createCrosswalkPrinter(crosswalkWriter);
-        invalidDataWriter = Files.newBufferedWriter(trackIfNew(invalidDataPath, createdPaths));
         CSVPrinter invalidDataPrinter = createInvalidDataPrinter(invalidDataWriter);
 
         byte[] sessionKey = Library.generateKey(SESSION_KEY_LENGTH);
@@ -335,36 +349,63 @@ public class Engine {
                   (this.numSubmittedJobs - this.numCompletedJobs), this.numSubmittedJobs, this.numCompletedJobs));
         }
         finished = finalProcessSucceeded;
+      } catch (Throwable exc) {
+        failure = exc;
+        throw exc;
       } finally {
         if (!finished) {
-          removeUnfinishedOutput(hashStream, crosswalkWriter, invalidDataWriter, createdPaths);
+          threadPool.shutdownNow();
+          removeUnfinishedOutput(new Closeable[] { hashStream, crosswalkWriter, invalidDataWriter }, createdPaths, failure);
         }
       }
     }
   }
 
-  /** Adds path to createdPaths when no file is there yet, so that only a file this run makes is ever removed. */
-  private static Path trackIfNew(Path path, List<Path> createdPaths) {
-    if (!Files.exists(path)) {
-      createdPaths.add(path);
-    }
-    return path;
+  /** The worker thread pool of one run. Package-private so that a test can check that a run shuts it down. */
+  ExecutorService createThreadPool(int numThreads) {
+    return new ThreadPoolExecutor(numThreads, numThreads, 30, TimeUnit.MINUTES,
+            new ArrayBlockingQueue<Runnable>(numThreads), new ThreadPoolExecutor.CallerRunsPolicy());
   }
 
   /**
-   * Close the output files of a run that did not finish, and remove the ones the run made. A failure to close does not
-   * stop the removal, and does not hide the error that stopped the run.
+   * Close the output files of a run that did not finish, and remove the ones the run made. Each file is closed and
+   * removed on its own, so one failure does not stop the others. When the run stopped on an error, a failure here is
+   * added to that error as a suppressed exception, so it does not hide it. Otherwise the first failure is thrown.
    */
-  private void removeUnfinishedOutput(BufferedOutputStream hashStream, BufferedWriter crosswalkWriter,
-                                      BufferedWriter invalidDataWriter, List<Path> createdPaths) throws IOException {
-    try {
-      closeWriters(hashStream, crosswalkWriter, invalidDataWriter);
-    } catch (IOException exc) {
-      executionReport.add("An output file could not be closed: " + exc.getMessage());
+  private static void removeUnfinishedOutput(Closeable[] files, List<Path> createdPaths, Throwable failure) throws IOException {
+    IOException problem = null;
+    for (Closeable file : files) {
+      try {
+        if (file != null) {
+          file.close();
+        }
+      } catch (IOException exc) {
+        problem = addProblem(problem, exc, failure);
+      }
     }
     for (Path path : createdPaths) {
-      Files.deleteIfExists(path);
+      try {
+        Files.deleteIfExists(path);
+      } catch (IOException exc) {
+        problem = addProblem(problem, exc, failure);
+      }
     }
+    if (problem != null) {
+      throw problem;
+    }
+  }
+
+  /** Adds exc to failure when there is one (and returns null), else to problem. Returns the problem to throw. */
+  private static IOException addProblem(IOException problem, IOException exc, Throwable failure) {
+    if (failure != null) {
+      failure.addSuppressed(exc);
+      return null;
+    }
+    if (problem == null) {
+      return exc;
+    }
+    problem.addSuppressed(exc);
+    return problem;
   }
 
   /**
