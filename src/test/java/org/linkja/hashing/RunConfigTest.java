@@ -3,6 +3,8 @@ package org.linkja.hashing;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.linkja.core.EncryptedHashFileMetadata;
 import org.linkja.core.LinkjaException;
 
@@ -147,15 +149,16 @@ class RunConfigTest {
     assertEquals("2001-02-03", java.time.LocalDate.parse("2001/02/03", parameters.getDateOfBirthFormatter()).toString());
   }
 
-  @Test
-  void missingRequiredKey_StopsBeforeOutput_NamesKey() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = { "site.salt_file", "aggregator.public_key", "site.private_date", "input.file" })
+  void missingRequiredKey_StopsBeforeOutput_NamesKey(String key) throws Exception {
     Path extract = write("standard.csv", STANDARD_EXTRACT);
     Path out = newDir();
     List<String> lines = requiredKeys(extract, out);
-    lines.removeIf(line -> line.startsWith("site.private_date="));
+    lines.removeIf(line -> line.startsWith(key + "="));
     String config = writeConfig(lines).toString();
     Exception exc = assertThrows(Exception.class, () -> hash("--config", config));
-    assertTrue(exc.getMessage().contains("site.private_date"), exc.getMessage());
+    assertTrue(exc.getMessage().contains(key), exc.getMessage());
     assertNoOutput(out);
   }
 
@@ -170,6 +173,139 @@ class RunConfigTest {
     assertTrue(exc.getMessage().contains("column.first_name"), exc.getMessage());
     assertTrue(exc.getMessage().contains("GIVEN"), exc.getMessage());
     assertNoOutput(out);
+  }
+
+
+  // ---- Review round 1 ----
+
+  @Test
+  void twoColumnKeysNameOneHeader_StopsTheRun() throws Exception {
+    Path extract = write("given-twice.csv", String.join("\n",
+      "patient_id,GIVEN,first_name,last_name,dob",
+      "P1,Alice,Al,Smith,02/03/2001") + "\n");
+    Path out = newDir();
+    List<String> lines = requiredKeys(extract, out);
+    lines.addAll(List.of("column.first_name=GIVEN", "column.last_name=GIVEN"));
+    String config = writeConfig(lines).toString();
+    LinkjaException exc = assertThrows(LinkjaException.class, () -> hash("--config", config));
+    assertTrue(exc.getMessage().contains("column.first_name"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("column.last_name"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("\"GIVEN\""), exc.getMessage());
+    assertNoOutput(out);
+  }
+
+  @Test
+  void columnKeyNamesRepeatedHeader_StopsTheRun() throws Exception {
+    Path extract = write("repeated-given.csv", String.join("\n",
+      "patient_id,GIVEN,GIVEN,last_name,dob",
+      "P1,Alice,Bobby,Smith,02/03/2001") + "\n");
+    Path out = newDir();
+    List<String> lines = requiredKeys(extract, out);
+    lines.add("column.first_name=GIVEN");
+    String config = writeConfig(lines).toString();
+    LinkjaException exc = assertThrows(LinkjaException.class, () -> hash("--config", config));
+    assertEquals("The field first_name has more than one column: \"GIVEN\" and \"GIVEN\". "
+      + "Keep one column for each field and run again.", exc.getMessage());
+    assertNoOutput(out);
+  }
+
+  @Test
+  void dateFormat_DayFirst_HashesAsIsoDatesByFlags() throws Exception {
+    Path extract = write("day-first.csv", String.join("\n",
+      "patient_id,first_name,last_name,dob,ssn",
+      "P1,Alice,Smith,03/02/2001,123-45-6780",
+      "P2,Bobby,Jones,30/11/1975,",
+      "P3,Carol,Brown,04/07/1960,987-65-4320") + "\n");
+    Path iso = write("iso.csv", String.join("\n",
+      "patient_id,first_name,last_name,dob,ssn",
+      "P1,Alice,Smith,2001-02-03,123-45-6780",
+      "P2,Bobby,Jones,1975-11-30,",
+      "P3,Carol,Brown,1960-07-04,987-65-4320") + "\n");
+    List<String> lines = requiredKeys(extract, newDir());
+    lines.add("input.date_format=dd/MM/uuuu");
+    List<String> byConfig = hash("--config", writeConfig(lines).toString());
+    assertEquals(3, byConfig.size());
+    assertEquals(hash(flagArgs(iso, newDir())), byConfig);
+  }
+
+  @Test
+  void dateFormat_OtherFormatRow_GoesToInvalidData() throws Exception {
+    Path extract = write("mixed.csv", String.join("\n",
+      "patient_id,first_name,last_name,dob,ssn",
+      "P1,Alice,Smith,2001/02/03,123-45-6780",
+      "P2,Bobby,Jones,02/03/2001,") + "\n");
+    Path out = newDir();
+    List<String> lines = requiredKeys(extract, out);
+    lines.add("input.date_format=uuuu/MM/dd");
+    assertEquals(1, hash("--config", writeConfig(lines).toString()).size());
+    String invalid = readOne(out, "DONOTSEND_invaliddata_");
+    assertTrue(invalid.contains("P2"), invalid);
+    assertFalse(invalid.contains("P1"), invalid);
+  }
+
+  @Test
+  void dateFormat_YearWithY_StopsAndSaysUseUuuu() throws Exception {
+    Path out = newDir();
+    List<String> lines = requiredKeys(write("standard.csv", STANDARD_EXTRACT), out);
+    lines.add("input.date_format=yyyy/MM/dd");
+    String config = writeConfig(lines).toString();
+    Exception exc = assertThrows(Exception.class, () -> hash("--config", config));
+    assertTrue(exc.getMessage().contains("uuuu"), exc.getMessage());
+    assertTrue(exc.getMessage().contains("input.date_format"), exc.getMessage());
+    assertNoOutput(out);
+  }
+
+  @Test
+  void withConfig_IdAndPatientId_ColumnKeyPicksOne_Hashes() throws Exception {
+    // The column map is applied before the one-column-per-field check, so naming PATIENT_ID drops ID.
+    Path extract = write("id-and-patient-id.csv", String.join("\n",
+      "ID,PATIENT_ID,first_name,last_name,dob,ssn",
+      "X1,P1,Alice,Smith,02/03/2001,123-45-6780",
+      "X2,P2,Bobby,Jones,11/30/1975,",
+      "X3,P3,Carol,Brown,07/04/1960,987-65-4320") + "\n");
+    List<String> lines = requiredKeys(extract, newDir());
+    lines.add("column.patient_id=PATIENT_ID");
+    List<String> byConfig = hash("--config", writeConfig(lines).toString());
+    assertEquals(hash(flagArgs(write("standard.csv", STANDARD_EXTRACT), newDir())), byConfig);
+  }
+
+  @Test
+  void unknownKey_StopsBeforeOutput_NamesKey() throws Exception {
+    Path out = newDir();
+    List<String> lines = requiredKeys(write("standard.csv", STANDARD_EXTRACT), out);
+    lines.add("input.date_fromat=dd/MM/uuuu");
+    String config = writeConfig(lines).toString();
+    Exception exc = assertThrows(Exception.class, () -> hash("--config", config));
+    assertTrue(exc.getMessage().contains("input.date_fromat"), exc.getMessage());
+    assertNoOutput(out);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = { "\t", "", " " })
+  void noConfig_BlankDelimiterFlag_Stops(String delimiter) throws Exception {
+    String[] args = flagArgs(write("standard.csv", STANDARD_EXTRACT), newDir());
+    String[] withDelimiter = java.util.Arrays.copyOf(args, args.length + 2);
+    withDelimiter[args.length] = "--delimiter";
+    withDelimiter[args.length + 1] = delimiter;
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters(withDelimiter));
+    assertEquals("You may specify one non-whitespace character as your delimiter", exc.getMessage());
+  }
+
+  @Test
+  void blankDelimiterKey_Stops() throws Exception {
+    List<String> lines = requiredKeys(write("standard.csv", STANDARD_EXTRACT), newDir());
+    lines.add("input.delimiter=");
+    String config = writeConfig(lines).toString();
+    Exception exc = assertThrows(LinkjaException.class, () -> parameters("--config", config));
+    assertEquals("You may specify one non-whitespace character as your delimiter", exc.getMessage());
+  }
+
+  @Test
+  void byteOrderMark_FirstKeyStillRead() throws Exception {
+    Path extract = write("standard.csv", STANDARD_EXTRACT);
+    Path config = Files.createTempFile(dir, "bom", ".properties");
+    Files.writeString(config, "\uFEFF" + String.join("\n", requiredKeys(extract, newDir())) + "\n");
+    assertEquals(saltFile.toFile(), parameters("--config", config.toString()).getSaltFile());
   }
 
   // ---- Helpers ----
@@ -219,6 +355,14 @@ class RunConfigTest {
 
   private static Path write(String name, String content) throws Exception {
     return Files.writeString(Files.createTempDirectory(dir, "in").resolve(name), content);
+  }
+
+  private static String readOne(Path out, String prefix) throws Exception {
+    try (Stream<Path> files = Files.list(out)) {
+      List<Path> matches = files.filter(p -> p.getFileName().toString().startsWith(prefix)).collect(Collectors.toList());
+      assertEquals(1, matches.size());
+      return Files.readString(matches.get(0));
+    }
   }
 
   private static Path newDir() throws Exception {

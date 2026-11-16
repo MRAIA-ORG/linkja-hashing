@@ -140,13 +140,15 @@ output.directory=out/
 Rules:
 
 * The required keys are `site.salt_file`, `aggregator.public_key`, `site.private_date` and `input.file`. Each one can come from the file or from its command-line flag (`--saltFile`, `--encryptionKey`, `--privateDate`, `--patientFile`). If one is missing, the run stops before it makes an output file, and the message names the key.
+* A key that is not one of the keys above, e.g. the typo `input.date_fromat`, stops the run, and the message names the key.
 * A flag on the command line wins over the same key in the file, e.g. `--delimiter "|"` wins over `input.delimiter=,`.
 * `output.directory` and `--outDirectory` are the same setting. Without either, the output goes to the current directory.
 * A relative path is read from the folder where you run `java`. Write paths with `/`. In a Properties file, `\` starts an escape, so `C:\keys\salt.txt` does not read as you expect. `C:/keys/salt.txt` works.
-* `input.date_format` is the format of the birth date, as a Java date pattern. Use `uuuu` for the year (e.g. `uuuu/MM/dd`), because the date parser is strict. When it is set, only that format is accepted. Without it, the default birth date formats apply.
+* `input.date_format` is the format of the birth date, as a Java date pattern. Use `uuuu` for the year (e.g. `uuuu/MM/dd`), because the date parser is strict. When it is set, only that format is accepted. Without it, the default birth date formats apply. A pattern that cannot read a full date, e.g. `yyyy/MM/dd`, stops the run.
 * A `column.<field>=<header>` key names the column of the input extract that gives the field. The field can be any name in the `alias_name` column of `src/main/resources/configuration/canonical-header-names.csv`, e.g. `column.patient_id`, `column.first_name`, `column.last_name`, `column.birth_date` (or `column.dob`) and `column.ssn`. Header matching ignores case.
 * For each field, the `column.` key wins over the fixed header list (`src/main/resources/configuration/canonical-header-names.csv`), even when that list maps the header to another field. The other columns that the list maps to that field are ignored.
 * The fixed header list is used only for a field with no `column.` key.
 * A column that is neither named by a `column.` key nor in the fixed header list is ignored. So you can use an extract you already have, with extra columns, as it is.
 * The column map is applied first. Then, as in every run, two columns that give one field stop the run, e.g. both `ID` and `PATIENT_ID`. To use an extract with both, name the one to use with a `column.` key.
 * A `column.` key that names a header the extract does not have stops the run before it makes an output file. The message names the key and the header.
+* Two `column.` keys that name one header stop the run, e.g. `column.first_name=GIVEN` and `column.last_name=GIVEN`.

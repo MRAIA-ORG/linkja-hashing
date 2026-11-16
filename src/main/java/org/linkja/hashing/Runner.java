@@ -11,11 +11,15 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.TreeMap;
 
 // TODO: Write unit tests for helper methods (everything but main)
 public class Runner {
   private static final String COLUMN_KEY_PREFIX = "column.";
+  // The run config keys other than "column.<field>". DataHeaderMap checks the field of each column key.
+  private static final Set<String> RUN_CONFIG_KEYS = Set.of("site.salt_file", "aggregator.public_key",
+    "site.private_date", "input.file", "input.delimiter", "input.date_format", "output.directory");
 
   public static void main(String[] args) {
     Options options = setUpCommandLine();
@@ -34,9 +38,7 @@ public class Runner {
 
     long startTime = System.nanoTime();
 
-    // Our parameters come from the command line and from a local config.properties file.  We split these up under the
-    // assumption that those most likely to change across run should be passed in the command line, and those most
-    // likely to remain consistent across runs should be in a config.properties file.
+    // Our parameters come from the command line, the run config (--config) and a local config.properties file.
     EngineParameters parameters = null;
     try {
       parameters = buildParameters(cmd);
@@ -95,16 +97,16 @@ public class Runner {
     parameters.setPrivateDate(requiredSetting(cmd, runConfig, "privateDate", "site.private_date"));
     parameters.setEncryptionKeyFile(requiredSetting(cmd, runConfig, "encryptionKey", "aggregator.public_key"));
     parameters.setDelimiter(setting(cmd, runConfig, "delimiter", "input.delimiter",
-      new String(new char[] { EngineParameters.DEFAULT_DELIMITER })));
+      new String(new char[] { EngineParameters.DEFAULT_DELIMITER })));  // A blank value stops the run, as on develop
     parameters.setRecordExclusionMode(parseRecordExclusionMode(cmd.getOptionValue("exclusionMode")));
     parameters = loadConfig(parameters);
     String outputDirectory = setting(cmd, runConfig, "outDirectory", "output.directory", null);
-    if (outputDirectory == null) {
+    if (outputDirectory == null || outputDirectory.trim().isEmpty()) {
       Path path = FileSystems.getDefault().getPath("").toAbsolutePath();
       outputDirectory = path.toString();
       System.out.printf("Results will be written to %s\r\n", outputDirectory);
     }
-    parameters.setOutputDirectory(outputDirectory);
+    parameters.setOutputDirectory(outputDirectory.trim());
 
     if (runConfig != null) {
       parameters.setDateFormat(runConfig.getProperty("input.date_format"));
@@ -118,33 +120,39 @@ public class Runner {
   }
 
   /**
-   * Read the run config, a Java Properties (key=value) file.
+   * Read the run config, a Java Properties (key=value) file in UTF-8. A byte order mark at the start is dropped.
+   * @throws LinkjaException When a key is not a run config key, e.g. a typo such as input.date_fromat
    */
-  public static Properties loadRunConfig(String path) throws IOException {
+  public static Properties loadRunConfig(String path) throws IOException, LinkjaException {
+    String text = Files.readString(Paths.get(path));
     Properties runConfig = new Properties();
-    try (Reader reader = Files.newBufferedReader(Paths.get(path))) {
-      runConfig.load(reader);
+    runConfig.load(new StringReader(text.startsWith("\uFEFF") ? text.substring(1) : text));
+    for (String key : runConfig.stringPropertyNames()) {
+      if (!key.startsWith(COLUMN_KEY_PREFIX) && !RUN_CONFIG_KEYS.contains(key)) {
+        throw new LinkjaException(String.format("The run config key %s is not a known key. Check its spelling in the README.", key));
+      }
     }
     return runConfig;
   }
 
   /**
-   * The value of one setting: the command-line flag if given, else the run config key, else the fallback.
+   * The value of one setting, as given: the command-line flag if given, else the run config key, else the fallback.
    */
   private static String setting(CommandLine cmd, Properties runConfig, String flag, String key, String fallback) {
     String value = cmd.getOptionValue(flag);
     if (value == null && runConfig != null) {
       value = runConfig.getProperty(key);
     }
-    return (value == null || value.trim().isEmpty()) ? fallback : value.trim();
+    return (value == null) ? fallback : value;
   }
 
+  /** A required setting, trimmed. A blank value counts as missing. */
   private static String requiredSetting(CommandLine cmd, Properties runConfig, String flag, String key) throws LinkjaException {
     String value = setting(cmd, runConfig, flag, key, null);
-    if (value == null) {
+    if (value == null || value.trim().isEmpty()) {
       throw new LinkjaException(String.format("The required setting %s is missing. Set it in the run config, or give --%s.", key, flag));
     }
-    return value;
+    return value.trim();
   }
 
   /**

@@ -41,7 +41,6 @@ public class NormalizationStep implements IStep {
     }
   }
 
-
   @Override
   public DataRow run(DataRow row) {
     if (row == null || !row.shouldProcess()) {

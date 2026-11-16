@@ -123,28 +123,36 @@ public class DataHeaderMap {
    * data row, where a header such as "first_name" would otherwise land on the field's key.
    * @param columnMap Field name (as written after "column.") to the header of the input extract
    * @param fieldNames The fixed header list. It also resolves the field names, e.g. "birth_date" to "date_of_birth".
-   * @throws LinkjaException When a column key names no field, or names a header that the extract does not have
+   * @throws LinkjaException When a column key names no field, names a header that the extract does not have, or names
+   *                         the same header as another key
    */
   private void applyColumnMap(Map<String, String> columnMap, Map<String, String> fieldNames) throws LinkjaException {
     // Resolve every key first, so that two keys that swap the fixed-list meaning of two headers both work.
     Map<DataHeaderMapEntry, String> mapped = new HashMap<DataHeaderMapEntry, String>();
+    Map<DataHeaderMapEntry, String> keyOfColumn = new HashMap<DataHeaderMapEntry, String>();
     for (Map.Entry<String, String> column : columnMap.entrySet()) {
       String key = "column." + column.getKey();
       String field = fieldNames.get(column.getKey().trim().toLowerCase());
       if (field == null) {
         throw new LinkjaException(String.format("The run config key %s names no linkja field.", key));
       }
-      DataHeaderMapEntry match = null;
+      // Every column with the header gets the field, so a repeated header stops the run in checkOneColumnPerField.
+      boolean found = false;
       for (DataHeaderMapEntry entry : this.entries.values()) {
         if (entry.getOriginalName().trim().equalsIgnoreCase(column.getValue().trim())) {
-          match = entry;
+          String otherKey = keyOfColumn.putIfAbsent(entry, key);
+          if (otherKey != null) {
+            throw new LinkjaException(String.format("The run config keys %s and %s both name the column \"%s\". Name each column once and run again.",
+              otherKey, key, entry.getOriginalName()));
+          }
+          mapped.put(entry, field);
+          found = true;
         }
       }
-      if (match == null) {
+      if (!found) {
         throw new LinkjaException(String.format("The run config key %s names the column \"%s\", but the input extract has no column with that header.",
           key, column.getValue()));
       }
-      mapped.put(match, field);
     }
 
     this.entries.values().removeIf(entry -> !mapped.containsKey(entry) && mapped.containsValue(entry.getCanonicalName()));

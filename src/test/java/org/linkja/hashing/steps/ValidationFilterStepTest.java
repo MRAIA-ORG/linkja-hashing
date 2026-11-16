@@ -3,7 +3,6 @@ package org.linkja.hashing.steps;
 import org.junit.jupiter.api.Test;
 import org.linkja.hashing.DataRow;
 import org.linkja.hashing.Engine;
-
 import org.linkja.hashing.EngineParameters;
 
 import static org.junit.jupiter.api.Assertions.*;

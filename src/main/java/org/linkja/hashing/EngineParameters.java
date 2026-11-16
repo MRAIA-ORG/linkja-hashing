@@ -7,6 +7,7 @@ import java.io.FileNotFoundException;
 import java.nio.file.Path;
 import java.security.InvalidParameterException;
 import java.text.ParseException;
+import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.ResolverStyle;
@@ -268,10 +269,25 @@ public class EngineParameters {
 
   /**
    * @param pattern The input.date_format value. When it is null or empty, the default birth date formats apply.
+   * @throws LinkjaException When the pattern cannot read back a full date, e.g. "yyyy/MM/dd", which the strict
+   *                         resolver rejects for every date
    */
-  public void setDateFormat(String pattern) {
-    this.dateOfBirthFormatter = (pattern == null || pattern.trim().isEmpty())
-      ? ValidationFilterStep.DATE_OF_BIRTH_FORMATTER : dateOfBirthFormatter(pattern.trim());
+  public void setDateFormat(String pattern) throws LinkjaException {
+    if (pattern == null || pattern.trim().isEmpty()) {
+      this.dateOfBirthFormatter = ValidationFilterStep.DATE_OF_BIRTH_FORMATTER;
+      return;
+    }
+    try {
+      DateTimeFormatter formatter = dateOfBirthFormatter(pattern.trim());
+      LocalDate sample = LocalDate.of(2001, 2, 3);
+      LocalDate.parse(sample.format(formatter), formatter);
+      this.dateOfBirthFormatter = formatter;
+    }
+    catch (DateTimeException | IllegalArgumentException exc) {
+      throw new LinkjaException(String.format(
+        "The input.date_format \"%s\" cannot read a full date. Use uuuu for the year, MM for the month and dd for the day, e.g. uuuu/MM/dd.",
+        pattern.trim()));
+    }
   }
 
   public Map<String, String> getColumnMap() {
