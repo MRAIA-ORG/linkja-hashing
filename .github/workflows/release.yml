@@ -28,11 +28,13 @@ jobs:
           persist-credentials: false
 
       # The release notes say that a tag message with no security fix means no security fix.
-      # A plain tag has no message, so stop before the build.
-      - name: Require an annotated tag
+      # So stop before the build unless the tag is annotated, has a message, and points at the commit this run builds.
+      - name: Check the tag
         run: |
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
           test "$(git cat-file -t "$TAG")" = tag || { echo "::error::$TAG is a plain tag. Push an annotated tag (git tag -a)."; exit 1; }
+          test -n "$(git tag -l --format='%(contents:subject)' "$TAG")" || { echo "::error::$TAG has an empty tag message. Name each security fix in it."; exit 1; }
+          test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$GITHUB_SHA" || { echo "::error::$TAG now points at a commit other than $GITHUB_SHA, which this run builds. Start a new run from the tag."; exit 1; }
 
       # The C library fixes for OpenSSL 3 are on linkja-crypto develop only.
       - uses: actions/checkout@v7
@@ -94,11 +96,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # Check again here: the tag can move after the build job reads it.
-      - name: Require an annotated tag
+      # Check again before the release reads the tag message. The tag can move after the build job checks it,
+      # and a re-run keeps the old commit. The release must use the message of the tag on the built commit.
+      - name: Check the tag
         run: |
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
           test "$(git cat-file -t "$TAG")" = tag || { echo "::error::$TAG is a plain tag. Push an annotated tag (git tag -a)."; exit 1; }
+          test -n "$(git tag -l --format='%(contents:subject)' "$TAG")" || { echo "::error::$TAG has an empty tag message. Name each security fix in it."; exit 1; }
+          test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$GITHUB_SHA" || { echo "::error::$TAG now points at a commit other than $GITHUB_SHA, which this run builds. Start a new run from the tag."; exit 1; }
 
       - uses: actions/download-artifact@v8
         with:
