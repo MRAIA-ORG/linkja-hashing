@@ -36,6 +36,24 @@ This compiles the code, runs all unit tests, and creates an executable JAR file 
 
 CI runs the same steps on each pull request. See `.github/workflows/ci.yml`.
 
+## Download and check a release
+Each release on the [Releases page](https://github.com/MRAIA-ORG/linkja-hashing/releases) holds the program JAR and a `SHA256SUMS` file. The JAR also has a build provenance attestation. It shows that GitHub built the JAR from this repository with `.github/workflows/release.yml`. Check both before you use a release. The commands need the [GitHub CLI](https://cli.github.com/), signed in. Put the release tag in place of `vX.Y.Z`:
+
+```
+gh release download vX.Y.Z -R MRAIA-ORG/linkja-hashing -D linkja-hashing-vX.Y.Z
+cd linkja-hashing-vX.Y.Z
+sha256sum -c SHA256SUMS
+gh attestation verify Hashing-X.Y.Z-jar-with-dependencies.jar -R MRAIA-ORG/linkja-hashing
+```
+
+Both checks must pass. If one fails, do not use the JAR. On macOS without `sha256sum`, use `shasum -a 256 -c SHA256SUMS`.
+
+The release holds the JAR only. Get the linkja C library separately. It comes from [linkja-crypto](https://github.com/MRAIA-ORG/linkja-crypto), which has no release yet.
+
+The release notes start with the tag message. The tag message names each change that fixes a security problem. Use it to choose between two versions.
+
+To make a release, push an annotated tag that matches the version in `pom.xml`, e.g. `git tag -a vX.Y.Z` and then `git push origin vX.Y.Z`. Release tags start with `v`. The older tags, e.g. `1.1.1`, do not. Name each security fix in the tag message. If the tag is a plain tag, has an empty message, or differs from the version, the release job stops and makes no release.
+
 ## Program Use
 You can run the executable JAR file (the one including `with-dependencies` in the file name) using the standard Java command:
 `java -jar <JAR path>`
