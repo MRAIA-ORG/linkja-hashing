@@ -12,7 +12,10 @@ import org.linkja.core.LinkjaException;
 import org.linkja.hashing.steps.HashingStep;
 import org.linkja.hashing.steps.ValidationFilterStep;
 
+import java.io.FilterOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -27,7 +30,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -142,12 +147,21 @@ class EngineRunTest {
 
   /**
    * Ticket #96. With many rows, small batches and one worker thread, the secure hash step fails while rows are still
-   * being read, so the run stops in the middle of the read loop. It must still remove the files it made. That route
-   * returns without an exception today (ticket #99). An exception here means the run took another route.
+   * being read, so the run stops in the middle of the read loop. It must still remove the files it made. Ticket #99:
+   * that route returned without an exception, so the jar exited 0. It must throw, and name the failure.
    */
   @Test
   void run_SecureHashThrowsMidRun_RemovesFilesItMade(@TempDir Path dir) throws Exception {
     Path outputDir = Files.createDirectory(dir.resolve("out"));
+    Engine engine = midRunFailingEngine(dir, outputDir);
+
+    LinkjaException exc = assertThrows(LinkjaException.class, engine::run);
+    assertEquals("The run stopped while writing the results: secure hash failed", exc.getMessage());
+    assertEquals(Set.of(), listFiles(outputDir));
+  }
+
+  /** An engine whose secure hash step throws while the read loop is still running (see the test above). */
+  static Engine midRunFailingEngine(Path dir, Path outputDir) throws Exception {
     StringBuilder extract = new StringBuilder("patient_id,first_name,last_name,date_of_birth,social_security_number\n");
     for (int row = 0; row < MID_RUN_ROWS; row++) {
       extract.append("P").append(row).append(",Alice,Example,1980-01-15,234-56-7890\n");
@@ -155,15 +169,12 @@ class EngineRunTest {
     EngineParameters parameters = runParameters(dir, outputDir, extract.toString());
     parameters.setBatchSize(MID_RUN_BATCH_SIZE);
     parameters.setNumWorkerThreads(1);
-    Engine engine = new Engine(parameters, createHashParameters()) {
+    return new Engine(parameters, createHashParameters()) {
       @Override
       String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
         throw new UnsupportedOperationException("secure hash failed");
       }
     };
-
-    engine.run();
-    assertEquals(Set.of(), listFiles(outputDir));
   }
 
   /** Ticket #96. An Error from the secure hash step stops the worker threads, so the JVM can exit. */
@@ -190,6 +201,76 @@ class EngineRunTest {
     assertTrue(pools.get(0).isShutdown());
   }
 
+  /**
+   * Ticket #99. Each output file fails to close. The run must still stop with the error of the secure hash step, and
+   * keep each close failure as a suppressed exception of that error.
+   */
+  @Test
+  void run_CloseFailsAfterError_KeepsOriginalError(@TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    Engine engine = new Engine(runParameters(dir, outputDir), createHashParameters()) {
+      @Override
+      String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
+        throw new UnsupportedOperationException("secure hash failed");
+      }
+
+      @Override
+      OutputStream openOutput(Path path) throws IOException {
+        return new FilterOutputStream(super.openOutput(path)) {
+          @Override
+          public void close() throws IOException {
+            super.close();
+            throw new IOException("close failed");
+          }
+        };
+      }
+    };
+
+    LinkjaException exc = assertThrows(LinkjaException.class, engine::run);
+    assertEquals("The run stopped while writing the results: secure hash failed", exc.getMessage());
+    assertTrue(exc.getSuppressed().length > 0);
+    for (Throwable suppressed : exc.getSuppressed()) {
+      assertEquals("close failed", suppressed.getMessage());
+    }
+    assertEquals(Set.of(), listFiles(outputDir));
+  }
+
+  /**
+   * Ticket #99. A failed run closes each output file while the file is still there, i.e. before it removes it. macOS and
+   * Linux remove an open file, but Windows does not, so only this test finds a missing close.
+   */
+  @Test
+  void run_Fails_ClosesEachFileBeforeRemovingIt(@TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    Map<Path, Boolean> thereWhenClosed = new ConcurrentHashMap<>();
+    List<Path> opened = new ArrayList<>();
+    Engine engine = new Engine(runParameters(dir, outputDir), createHashParameters()) {
+      @Override
+      String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
+        throw new UnsupportedOperationException("secure hash failed");
+      }
+
+      @Override
+      OutputStream openOutput(Path path) throws IOException {
+        opened.add(path);
+        return new FilterOutputStream(super.openOutput(path)) {
+          @Override
+          public void close() throws IOException {
+            thereWhenClosed.putIfAbsent(path, Files.exists(path));
+            super.close();
+          }
+        };
+      }
+    };
+
+    assertThrows(LinkjaException.class, engine::run);
+    assertEquals(3, opened.size());
+    for (Path path : opened) {
+      assertEquals(Boolean.TRUE, thereWhenClosed.get(path), path.toString());
+    }
+    assertEquals(Set.of(), listFiles(outputDir));
+  }
+
   /** Ticket #96. A run that stops on a repeated patient ID leaves no output file. */
   @Test
   void run_DuplicatePatientId_LeavesNoOutputFiles(@TempDir Path dir) throws Exception {
@@ -201,7 +282,7 @@ class EngineRunTest {
   }
 
   /** An engine whose secure hash step throws UnsatisfiedLinkError (linkError) or UnsupportedOperationException. */
-  private static Engine failingEngine(Path dir, Path outputDir, boolean linkError) throws Exception {
+  static Engine failingEngine(Path dir, Path outputDir, boolean linkError) throws Exception {
     return new Engine(runParameters(dir, outputDir), createHashParameters()) {
       @Override
       String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
@@ -249,7 +330,7 @@ class EngineRunTest {
   }
 
   /** Parameters for one ONE_COLUMN_PER_FIELD run. Writes the extract and a key pair into dir. */
-  private static EngineParameters runParameters(Path dir, Path outputDir) throws Exception {
+  static EngineParameters runParameters(Path dir, Path outputDir) throws Exception {
     return runParameters(dir, outputDir, ONE_COLUMN_PER_FIELD);
   }
 
@@ -263,7 +344,7 @@ class EngineRunTest {
     return parameters;
   }
 
-  private static Set<Path> listFiles(Path folder) throws Exception {
+  static Set<Path> listFiles(Path folder) throws Exception {
     try (Stream<Path> files = Files.list(folder)) {
       return files.collect(Collectors.toSet());
     }
@@ -367,7 +448,7 @@ class EngineRunTest {
       + "\n-----END " + type + "-----\n";
   }
 
-  private static HashParameters createHashParameters() {
+  static HashParameters createHashParameters() {
     HashParameters hashParameters = new HashParameters();
     hashParameters.setSiteId("site1");
     hashParameters.setSiteName("Test Site");

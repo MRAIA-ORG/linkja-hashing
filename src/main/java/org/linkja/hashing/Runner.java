@@ -34,7 +34,13 @@ public class Runner {
     }
 
     if (cmd.hasOption("version")) {
-      displayVersion();
+      try {
+        displayVersion();
+      }
+      catch (Throwable exc) {
+        System.out.println(errorLine(exc));
+        System.exit(1);
+      }
       System.exit(0);
     }
 
@@ -48,9 +54,7 @@ public class Runner {
     catch (Exception exc) {
       displayUsage();
       System.out.println();
-      if (exc.getMessage() != null) {
-        System.out.println(exc.getMessage());
-      }
+      System.out.println("ERROR - The settings are not valid: " + reason(exc));
       System.exit(1);
     }
 
@@ -60,28 +64,56 @@ public class Runner {
       hashParameters.setPrivateDate(parameters.getPrivateDate());  // Provide a copy to our hashing parameters collection
     }
     catch (Exception exc) {
-      System.out.println("ERROR - We encountered an error when trying to decrypt the salt file using the private key");
-      System.out.println(exc.getMessage());
+      System.out.println("ERROR - The salt file could not be read: " + reason(exc));
       System.exit(1);
     }
 
-    try {
-      Engine engine = new Engine(parameters, hashParameters);
-      engine.run();
-
-      String report = String.join("\r\n", engine.getExecutionReport());
-      System.out.println(report);
-    }
-    catch (Exception exc) {
-      System.out.println("ERROR - We encountered an error while processing your data file");
-      System.out.println(exc.getMessage());
-      System.exit(1);
+    int exitCode = runEngine(new Engine(parameters, hashParameters), System.out);
+    if (exitCode != 0) {
+      System.exit(exitCode);
     }
 
     long endTime = System.nanoTime();
 
     double elapsedSeconds = (double)(endTime - startTime) / 1_000_000_000.0;
     System.out.printf("Total execution time: %2f sec\n", elapsedSeconds);
+  }
+
+  /**
+   * Run the engine and print its report.
+   * @param engine The engine of this run
+   * @param out Where the report or the error goes
+   * @return The exit code of the jar: 0 when the run finished, else not 0
+   */
+  static int runEngine(Engine engine, PrintStream out) {
+    try {
+      engine.run();
+
+      String report = String.join("\r\n", engine.getExecutionReport());
+      out.println(report);
+    }
+    catch (Throwable exc) {
+      out.println(errorLine(exc));
+      // A failure while closing or removing an output file is kept as a suppressed exception. It names the file.
+      for (Throwable suppressed : exc.getSuppressed()) {
+        out.println("  Also failed: " + reason(suppressed));
+      }
+      return 1;
+    }
+    return 0;
+  }
+
+  /** The one "ERROR - " line of a failed run. It says what failed. */
+  private static String errorLine(Throwable exc) {
+    if (exc instanceof LinkageError) {
+      return "ERROR - The crypto C library could not be loaded: " + reason(exc);
+    }
+    return "ERROR - The run failed: " + reason(exc);
+  }
+
+  /** The message of exc, or its class and message when it has no message. */
+  private static String reason(Throwable exc) {
+    return (exc.getMessage() != null) ? exc.getMessage() : exc.toString();
   }
 
   /**
@@ -363,7 +395,7 @@ public class Runner {
     } catch (ParseException e) {
       displayUsage();
       System.out.println();
-      System.out.println(e.getMessage());
+      System.out.println("ERROR - The command line is not valid: " + e.getMessage());
       return null;
     }
 
