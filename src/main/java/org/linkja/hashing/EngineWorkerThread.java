@@ -1,6 +1,5 @@
 package org.linkja.hashing;
 
-import org.linkja.core.crypto.AesEncryptParameters;
 import org.linkja.hashing.steps.*;
 
 import java.time.format.DateTimeFormatter;
