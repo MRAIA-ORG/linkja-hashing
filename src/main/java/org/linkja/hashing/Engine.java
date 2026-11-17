@@ -454,8 +454,15 @@ public class Engine {
       } while (waitUntilComplete);
     }
     catch (Exception exc) {
-      // A worker failure comes wrapped in an ExecutionException. Name the failure inside it.
+      if (exc instanceof InterruptedException) {
+        Thread.currentThread().interrupt();  // Keep the interrupt for the caller
+      }
+      // A worker failure comes wrapped in an ExecutionException. Name the failure inside it. An Error, e.g. a
+      // LinkageError of the crypto C library, is thrown as it is, the same as when the run thread throws it.
       Throwable cause = (exc instanceof ExecutionException && exc.getCause() != null) ? exc.getCause() : exc;
+      if (cause instanceof Error) {
+        throw (Error) cause;
+      }
       String reason = (cause.getMessage() != null) ? cause.getMessage() : cause.toString();
       LinkjaException stop = new LinkjaException("The run stopped while writing the results: " + reason);
       stop.initCause(exc);
