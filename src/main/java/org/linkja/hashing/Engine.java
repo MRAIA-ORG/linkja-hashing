@@ -5,10 +5,6 @@ import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
-import org.apache.commons.lang3.ArrayUtils;
-import org.apache.commons.lang3.StringUtils;
-import org.linkja.core.crypto.AesEncryptParameters;
-import org.linkja.crypto.AesResult;
 import org.linkja.crypto.Library;
 import org.linkja.hashing.steps.*;
 import org.linkja.core.*;
@@ -483,18 +479,6 @@ public class Engine {
     return metadata;
   }
 
-  private void writeEncryptedHashHeader(BufferedOutputStream hashStream, AesEncryptParameters encryptParameters, String header) throws LinkjaException, IOException {
-    writeEncryptedString(hashStream, encryptParameters, header, 128);
-  }
-
-  private void writeEncryptedString(BufferedOutputStream hashStream, AesEncryptParameters encryptParameters, String data, int padLength) throws LinkjaException, IOException {
-    AesResult encryptResult = Library.aesEncrypt(StringUtils.rightPad(data, padLength).getBytes(), encryptParameters.getAad(), encryptParameters.getKey(), encryptParameters.getIv());
-    if (encryptResult == null) {
-      throw new LinkjaException("Failed to encrypt string");
-    }
-    hashStream.write(ArrayUtils.addAll(encryptResult.data, encryptResult.tag));
-  }
-
   /**
    * Creates a CSVPrinter object to be used for creating our crosswalk data
    * @param writer
@@ -659,38 +643,6 @@ public class Engine {
       return EMPTY_HASH;
     }
     return (String)row.get(rowName);
-  }
-
-  /**
-   * Utility method for development purposes only.  This writes a given data row
-   * to the console.
-   * @param row The DataRow to write out
-   */
-  private void dumpRow(DataRow row) {
-    dumpRow(row, 0);
-  }
-
-  /**
-   * Utility method for development purposes only.  This writes a given data row
-   * to the console.
-   * @param row The DataRow to write out
-   * @param indentLevel The number of spaces to indent output (used for nested derived rows)
-   */
-  private void dumpRow(DataRow row, int indentLevel) {
-    String indentString = new String(new char[indentLevel*2]).replace("\0", " ");
-    for (Map.Entry<String,Object> entry : row.entrySet()) {
-      System.out.printf("%s%s - %s\r\n", indentString, entry.getKey(), entry.getValue());
-    }
-    if (row.getInvalidReason() != null && !row.getInvalidReason().equals("")) {
-      System.out.printf("%sINVALID REASON: - %s\r\n", indentString, row.getInvalidReason());
-    }
-    if (row.hasDerivedRows()) {
-      System.out.printf("%sDERIVED ROWS:\r\n", indentString);
-      for (DataRow derivedRow : row.getDerivedRows()) {
-        dumpRow(derivedRow, indentLevel+1);
-      }
-    }
-    System.out.println();
   }
 
   /**

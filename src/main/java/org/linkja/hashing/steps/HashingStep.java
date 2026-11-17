@@ -120,7 +120,6 @@ public class HashingStep implements IStep {
     if (row.containsKey(Engine.SOCIAL_SECURITY_NUMBER) && ((String)row.get(Engine.SOCIAL_SECURITY_NUMBER)).length() > 0) {
       row = fnamelnamedobssnHash(row);
       row = lnamefnamedobssnHash(row);
-      row = fnamelnamedobssnHash(row);
       row = fnamelnameTdobssnHash(row);
       if (!isDerivedRow) {
         row = fname3lnamedobssnHash(row);
