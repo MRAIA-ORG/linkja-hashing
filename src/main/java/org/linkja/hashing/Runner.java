@@ -94,7 +94,8 @@ public class Runner {
     }
     catch (Throwable exc) {
       out.println(errorLine(exc));
-      // A failure while closing or removing an output file is kept as a suppressed exception. It names the file.
+      // A failure while closing or removing an output file is kept as a suppressed exception. A remove failure names
+      // the file. A close failure gives only the reason from the stream, with no file name.
       for (Throwable suppressed : exc.getSuppressed()) {
         out.println("  Also failed: " + reason(suppressed));
       }

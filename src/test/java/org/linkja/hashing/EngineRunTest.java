@@ -32,8 +32,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RunnableFuture;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -208,7 +214,20 @@ class EngineRunTest {
   @Test
   void run_CloseFailsAfterError_KeepsOriginalError(@TempDir Path dir) throws Exception {
     Path outputDir = Files.createDirectory(dir.resolve("out"));
-    Engine engine = new Engine(runParameters(dir, outputDir), createHashParameters()) {
+
+    LinkjaException exc = assertThrows(LinkjaException.class, closeFailingEngine(dir, outputDir)::run);
+    assertEquals("The run stopped while writing the results: secure hash failed", exc.getMessage());
+    // One close failure for each of the 3 output files: a failed close does not stop the close of the next file.
+    assertEquals(3, exc.getSuppressed().length);
+    for (Throwable suppressed : exc.getSuppressed()) {
+      assertEquals("close failed", suppressed.getMessage());
+    }
+    assertEquals(Set.of(), listFiles(outputDir));
+  }
+
+  /** An engine whose secure hash step throws, and whose output files each fail to close (see the test above). */
+  static Engine closeFailingEngine(Path dir, Path outputDir) throws Exception {
+    return new Engine(runParameters(dir, outputDir), createHashParameters()) {
       @Override
       String createSecureHash(String hash, byte[] sessionKey, String rowId, String tokenId) {
         throw new UnsupportedOperationException("secure hash failed");
@@ -225,14 +244,53 @@ class EngineRunTest {
         };
       }
     };
+  }
+
+  /** Ticket #101. A worker thread throws. The run names the failure inside the ExecutionException, and removes its files. */
+  @Test
+  void run_WorkerThrows_NamesTheFailure(@TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    Engine engine = workerFailingEngine(dir, outputDir, () -> { throw new IllegalStateException("worker failed"); });
 
     LinkjaException exc = assertThrows(LinkjaException.class, engine::run);
-    assertEquals("The run stopped while writing the results: secure hash failed", exc.getMessage());
-    assertTrue(exc.getSuppressed().length > 0);
-    for (Throwable suppressed : exc.getSuppressed()) {
-      assertEquals("close failed", suppressed.getMessage());
+    assertEquals("The run stopped while writing the results: worker failed", exc.getMessage());
+    assertEquals(Set.of(), listFiles(outputDir));
+  }
+
+  /** Ticket #101. The run thread is interrupted while it waits for a worker. The run stops and keeps the interrupt. */
+  @Test
+  void run_InterruptedWhileWaiting_KeepsInterruptFlag(@TempDir Path dir) throws Exception {
+    Path outputDir = Files.createDirectory(dir.resolve("out"));
+    Thread runThread = Thread.currentThread();
+    Engine engine = workerFailingEngine(dir, outputDir, () -> {
+      runThread.interrupt();
+      new CountDownLatch(1).await();  // Waits until the run stops the workers
+      return null;
+    });
+
+    try {
+      assertThrows(LinkjaException.class, engine::run);
+    } finally {
+      // Thread.interrupted clears the flag, so the next test does not start interrupted.
+      assertTrue(Thread.interrupted());
     }
     assertEquals(Set.of(), listFiles(outputDir));
+  }
+
+  /** An engine whose worker tasks run work, on a worker thread, in place of EngineWorkerThread. */
+  static Engine workerFailingEngine(Path dir, Path outputDir, Callable<List<DataRow>> work) throws Exception {
+    return new Engine(runParameters(dir, outputDir), createHashParameters()) {
+      @Override
+      ExecutorService createThreadPool(int numThreads) {
+        return new ThreadPoolExecutor(numThreads, numThreads, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>()) {
+          @Override
+          @SuppressWarnings("unchecked")
+          protected <T> RunnableFuture<T> newTaskFor(Callable<T> task) {
+            return super.newTaskFor((Callable<T>) work);
+          }
+        };
+      }
+    };
   }
 
   /**
@@ -335,7 +393,7 @@ class EngineRunTest {
   }
 
   /** Parameters for one run of extract. Writes the extract and a key pair into dir. */
-  private static EngineParameters runParameters(Path dir, Path outputDir, String extract) throws Exception {
+  static EngineParameters runParameters(Path dir, Path outputDir, String extract) throws Exception {
     Path patientFile = Files.writeString(dir.resolve("patients.csv"), extract);
     EngineParameters parameters = new EngineParameters();
     parameters.setPatientFile(patientFile.toFile());
