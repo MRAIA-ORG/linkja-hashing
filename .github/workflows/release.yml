@@ -1,22 +1,38 @@
 name: Release
 
-# Runs only when a maintainer pushes a version tag, e.g. v1.1.1.
+# Runs only when a maintainer pushes a version tag, e.g. vX.Y.Z.
 on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write      # create the release
-  id-token: write      # sign the build provenance
-  attestations: write  # store the build provenance
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+env:
+  TAG: ${{ github.ref_name }}
 
 jobs:
-  release:
+  # Runs Maven and its plugins. So it gets read access only and no token on disk.
+  build:
     runs-on: ubuntu-latest
-    env:
-      TAG: ${{ github.ref_name }}
+    permissions:
+      contents: read
+    outputs:
+      jar: ${{ steps.sums.outputs.jar }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The release notes say that a tag message with no security fix means no security fix.
+      # A plain tag has no message, so stop before the build.
+      - name: Require an annotated tag
+        run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git cat-file -t "$TAG")" = tag || { echo "::error::$TAG is a plain tag. Push an annotated tag (git tag -a)."; exit 1; }
 
       # The C library fixes for OpenSSL 3 are on linkja-crypto develop only.
       - uses: actions/checkout@v7
@@ -24,12 +40,13 @@ jobs:
           repository: MRAIA-ORG/linkja-crypto
           ref: develop
           path: linkja-crypto
+          persist-credentials: false
 
+      # No Maven cache: a cache from another run must not go into a release.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '25'
-          cache: maven
 
       - name: Install OpenSSL 3 and CMake
         run: sudo apt-get update && sudo apt-get install -y libssl-dev cmake
@@ -46,11 +63,47 @@ jobs:
 
       # The jar name holds the pom version. So this step fails when the tag and the pom version differ.
       - name: Write SHA256SUMS
+        id: sums
         working-directory: target
         run: |
           jar=$(ls -- *-"${TAG#v}"-jar-with-dependencies.jar)
           sha256sum "$jar" > SHA256SUMS
-          echo "JAR=target/$jar" >> "$GITHUB_ENV"
+          echo "jar=$jar" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: |
+            target/${{ steps.sums.outputs.jar }}
+            target/SHA256SUMS
+          if-no-files-found: error
+
+  # Holds the write token. Runs no Maven and no third-party build code.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # create the release
+      id-token: write      # sign the build provenance
+      attestations: write  # store the build provenance
+    env:
+      JAR: dist/${{ needs.build.outputs.jar }}
+    steps:
+      # Only to read the tag message.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Check again here: the tag can move after the build job reads it.
+      - name: Require an annotated tag
+        run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git cat-file -t "$TAG")" = tag || { echo "::error::$TAG is a plain tag. Push an annotated tag (git tag -a)."; exit 1; }
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
 
       - uses: actions/attest-build-provenance@v4
         with:
@@ -61,8 +114,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
           msg=$(git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$TAG")
-          gh release create "$TAG" "$JAR" target/SHA256SUMS --generate-notes --notes "$msg
+          gh release create "$TAG" "$JAR" dist/SHA256SUMS --generate-notes --notes "$msg
 
           Security fixes: the tag message above names each change in this release that fixes a security problem. If it names none, this release has no security fix."
