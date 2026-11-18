@@ -39,3 +39,49 @@ jobs:
 
       - name: Test and package linkja-hashing
         run: mvn -B verify -Dnative.lib.dir="$GITHUB_WORKSPACE/linkja-crypto/target"
+
+  # The golden hashing test of linkja-workspace, on this commit of linkja-hashing
+  # and the develop tip of the other programs. A change to the hash values fails
+  # here, before it merges. The steps match the golden-hashing job in
+  # linkja-workspace .github/workflows/ci.yml, so the result means the same thing.
+  golden-hashing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: linkja-hashing
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: MRAIA-ORG/linkja-workspace
+          ref: master
+          path: linkja-workspace
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: MRAIA-ORG/linkja-crypto
+          ref: develop
+          path: linkja-crypto
+          persist-credentials: false
+      # linkja-matching decrypts the hash file.
+      - uses: actions/checkout@v7
+        with:
+          repository: MRAIA-ORG/linkja-matching
+          ref: develop
+          path: linkja-matching
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: MRAIA-ORG/linkja-test-data
+          path: linkja-test-data
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Install OpenSSL 3 and CMake
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev cmake
+      - name: Golden test of hashing
+        run: linkja-workspace/scripts/test-golden-hashing.sh
